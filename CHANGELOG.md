@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4
+
+Packaging-only release. No functional changes.
+
+- Marketplace display name changed to **OpenCode Chat Sidebar GWS** because "OpenCode Chat Sidebar" is already taken on the Visual Studio Marketplace.
+- Package name (`opencode-chat-sidebar`), publisher (`GlobalWebSolutions`), extension ID `GlobalWebSolutions.opencode-chat-sidebar`, commands, settings keys (`opencodeSidebar.*`), view IDs, repository URLs and license are unchanged.
+- 0.2.3 is superseded by this release; it was never published to the Marketplace.
+
 ## 0.2.3
 
 Packaging-only release. No functional changes.

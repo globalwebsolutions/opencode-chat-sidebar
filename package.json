@@ -1,8 +1,8 @@
 {
   "name": "opencode-chat-sidebar",
-  "displayName": "OpenCode Chat Sidebar",
+  "displayName": "OpenCode Chat Sidebar GWS",
   "description": "A focused chat sidebar for OpenCode agents in VS Code.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "GlobalWebSolutions",
   "private": true,
   "license": "MIT",
