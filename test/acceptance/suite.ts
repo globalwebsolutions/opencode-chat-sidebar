@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { summarizeTask } from "../../src/core/currentTask";
 import type { TranscriptItem, UiEvent } from "../../src/shared/model";
 import type { WebviewMessage } from "../../src/shared/protocol";
 
@@ -18,6 +19,10 @@ interface TestApi {
   handle(msg: WebviewMessage): Promise<void>;
   ensureStarted(): Promise<void>;
   tap(fn: (events: UiEvent[]) => void): { dispose(): void };
+  setNotifier(
+    fn: (severity: string, message: string, actions: string[]) => Thenable<string | undefined>,
+  ): void;
+  viewVisible(): boolean;
 }
 
 const MODEL = process.env.ACCEPT_MODEL ?? "opencode-go/kimi-k2.7-code";
@@ -95,6 +100,18 @@ async function common(api: TestApi): Promise<void> {
     (st.agents ?? []).map((a) => a.id).join(", "),
   );
   await api.handle({ type: "selectModel", key: MODEL });
+  // OpenCode's provider catalog can change briefly (e.g. while it refreshes models.dev);
+  // if the requested model is not offered yet, reload the catalog and try again.
+  for (let attempt = 0; attempt < 3 && api.viewState().selectedModel !== MODEL; attempt++) {
+    console.log(
+      `model ${MODEL} not offered yet (${(api.viewState().models ?? []).length} models); reloading catalog`,
+    );
+    await new Promise((r) => setTimeout(r, 5000));
+    await api.handle({ type: "retry" });
+    await waitFor("connection", () => api.connection().kind === "connected", 30_000);
+    await waitFor("models", () => (api.controller()?.models?.length ?? 0) > 0, 30_000);
+    await api.handle({ type: "selectModel", key: MODEL });
+  }
   check("Model selection", api.viewState().selectedModel === MODEL, String(api.viewState().selectedModel));
 }
 
@@ -644,6 +661,23 @@ async function v02Fixture(api: TestApi): Promise<void> {
     text: "Queued: then reply with the single word QUEUED.",
     delivery: "queue",
   });
+  // Current Task: the running prompt, copied exactly.
+  const sleepPrompt = "Run the shell command `sleep 12 && echo first` and wait for it, then reply DONE.";
+  const runningTask = api.viewState().task;
+  check(
+    "Current Task shows the running prompt",
+    runningTask?.label === "current" && runningTask.summary === summarizeTask(sleepPrompt),
+    JSON.stringify(runningTask),
+  );
+  const savedClip = await vscode.env.clipboard.readText();
+  await api.handle({ type: "copyTaskPrompt", requestId: "task" });
+  const copiedPrompt = await vscode.env.clipboard.readText();
+  await vscode.env.clipboard.writeText(savedClip);
+  check(
+    "Copy Prompt copies the exact original prompt",
+    copiedPrompt === sleepPrompt,
+    copiedPrompt.slice(0, 60),
+  );
   await api.handle({ type: "send", text: "Queued2: reply SECOND.", delivery: "queue" });
   await waitFor("3 pending", () => api.viewState().pending.length === 3 || undefined, 10_000).catch(
     () => undefined,
@@ -654,8 +688,27 @@ async function v02Fixture(api: TestApi): Promise<void> {
     pend.some((p) => p.delivery === "steer") && pend.filter((p) => p.delivery === "queue").length === 2,
     JSON.stringify(pend.map((p) => [p.delivery, p.text.slice(0, 12)])),
   );
+  check(
+    "Queued prompt shows as Next with a count",
+    api.viewState().task?.next?.summary === "Queued: then reply with the single word QUEUED." &&
+      api.viewState().task?.next?.more === 1,
+    JSON.stringify(api.viewState().task?.next),
+  );
   const second = pend.find((p) => p.text.startsWith("Queued2"));
   if (second) await api.handle({ type: "removePending", id: second.id });
+  check(
+    "Removing a queued message updates Next",
+    api.viewState().task?.next?.more === 0,
+    JSON.stringify(api.viewState().task?.next),
+  );
+  await waitFor("steer delivered", () => api.viewState().task?.steer ?? undefined, 120_000).catch(
+    () => undefined,
+  );
+  check(
+    "Steer does not replace Current Task",
+    api.viewState().task?.id === runningTask?.id && /^Steering:/.test(api.viewState().task?.steer ?? ""),
+    JSON.stringify({ id: api.viewState().task?.id, steer: api.viewState().task?.steer }),
+  );
   check(
     "Removed queued message is cancelled in OpenCode",
     !api.viewState().pending.some((p) => p.text.startsWith("Queued2")),
@@ -692,6 +745,23 @@ async function v02Fixture(api: TestApi): Promise<void> {
       ),
   );
   check("Removed message never delivered", !users.some((u) => u.startsWith("Queued2")));
+  const doneTask = api.viewState().task;
+  check(
+    "Delivered queued prompt became the task; finished task shows as Last Task",
+    doneTask?.label === "last" &&
+      doneTask.summary.startsWith("Queued: then reply") &&
+      doneTask.status === "completed",
+    JSON.stringify(doneTask),
+  );
+  const sqSession = api.controller()?.current?.id;
+  await api.handle({ type: "newSession" });
+  check("New session shows no task", api.viewState().task === null);
+  await api.handle({ type: "selectSession", id: sqSession! });
+  check(
+    "Session reopen restores the task from OpenCode messages",
+    api.viewState().task?.id === doneTask?.id && api.viewState().task?.status === "completed",
+    JSON.stringify(api.viewState().task),
+  );
 
   // --- question form
   await api.handle({ type: "newSession" });
@@ -728,6 +798,12 @@ async function v02Fixture(api: TestApi): Promise<void> {
   const warned = events.slice(since).some((e) => e.type === "budget" && e.state === "warning");
   const idle = await waitIdle(api, since, 60_000);
   check("Budget warning shown before the limit", warned);
+  const budgetTask = api.viewState().task;
+  check(
+    "Budget stop keeps the task (Stopped — budget reached)",
+    budgetTask?.status === "budget-stopped" && budgetTask.summary.startsWith("Run these shell commands"),
+    JSON.stringify(budgetTask),
+  );
   check(
     "Budget hard limit interrupts the real OpenCode run",
     idle.outcome === "interrupted",
@@ -740,6 +816,16 @@ async function v02Fixture(api: TestApi): Promise<void> {
     () => events.slice(since).some((e) => e.type === "session.busy") || undefined,
     60_000,
   );
+  await waitFor(
+    "continuation delivered",
+    () => api.viewState().task?.status === "running" || undefined,
+    30_000,
+  ).catch(() => undefined);
+  check(
+    "Continue once keeps the same task",
+    api.viewState().task?.id === budgetTask?.id && api.viewState().task?.status === "running",
+    JSON.stringify(api.viewState().task),
+  );
   const carried = api.viewState().budget;
   check(
     "Continue once resumes the same task with one override",
@@ -748,6 +834,32 @@ async function v02Fixture(api: TestApi): Promise<void> {
   );
   await waitIdle(api, since, 240_000);
   await api.handle({ type: "selectBudget", level: "off" });
+
+  // --- task completion notification and "Open Chat"
+  const shown: string[] = [];
+  api.setNotifier(async (_severity, message) => {
+    shown.push(message);
+    return "Open Chat";
+  });
+  await vscode.commands.executeCommand("workbench.action.closeSidebar");
+  await new Promise((r) => setTimeout(r, 800));
+  const hiddenBefore = !api.viewVisible();
+  await api.handle({ type: "newSession" });
+  since = events.length;
+  await api.handle({ type: "send", text: "Reply with the single word OK." });
+  await waitIdle(api, since, 180_000);
+  await waitFor("view revealed", () => api.viewVisible() || undefined, 10_000).catch(() => undefined);
+  check(
+    "Completion notification uses the task summary and Open Chat reveals the view",
+    hiddenBefore &&
+      shown.length === 1 &&
+      shown[0] === "✅ OpenCode task completed: Reply with the single word OK." &&
+      api.viewVisible(),
+    JSON.stringify({ hiddenBefore, shown, visible: api.viewVisible() }),
+  );
+  await api.handle({ type: "newSession" });
+  await api.handle({ type: "selectSession", id: sqSession! });
+  check("Reopening a session does not replay notifications", shown.length === 1);
 
   // --- model variant
   const withVariant = (api.viewState().models ?? []).find(
@@ -778,6 +890,174 @@ async function v02Fixture(api: TestApi): Promise<void> {
   } else {
     check("Model variant sent to OpenCode", true, "skipped: no model with variant 'none' for this provider");
   }
+}
+
+// ======================================================= 0.2.1 Current Task (real repo, read-only)
+
+/** Reads stored messages straight from OpenCode (independent of the extension). */
+async function storedMessages(sessionId: string): Promise<Array<Record<string, unknown>>> {
+  const home = process.env.HOME ?? "";
+  const svc = JSON.parse(
+    fs.readFileSync(
+      path.join(process.env.XDG_STATE_HOME ?? path.join(home, ".local", "state"), "opencode", "service.json"),
+      "utf8",
+    ),
+  );
+  const headers = { authorization: "Basic " + Buffer.from("opencode:" + svc.password).toString("base64") };
+  const out: Array<Record<string, unknown>> = [];
+  let cursor: string | null = null;
+  for (let i = 0; i < 20; i++) {
+    const url = new URL(`/api/session/${sessionId}/message`, svc.url);
+    if (cursor) url.searchParams.set("cursor", cursor);
+    else url.searchParams.set("order", "asc");
+    url.searchParams.set("limit", "100");
+    const page = (await (await fetch(url, { headers })).json()) as {
+      data: Array<Record<string, unknown>>;
+      cursor?: { next?: string | null };
+    };
+    out.push(...page.data);
+    cursor = page.cursor?.next ?? null;
+    if (!cursor || page.data.length === 0) break;
+  }
+  return out;
+}
+
+async function realRepoTask(api: TestApi): Promise<void> {
+  await common(api);
+  // Never let Budget Guard act on someone else's run while browsing existing sessions.
+  await api.handle({ type: "selectBudget", level: "off" });
+  await api.handle({ type: "selectAgent", id: "plan" });
+
+  // 1. An existing, idle session.
+  const active = new Set<string>();
+  const svcActive = await (async () => {
+    const home = process.env.HOME ?? "";
+    const svc = JSON.parse(
+      fs.readFileSync(path.join(home, ".local", "state", "opencode", "service.json"), "utf8"),
+    );
+    const headers = { authorization: "Basic " + Buffer.from("opencode:" + svc.password).toString("base64") };
+    return (
+      (await (await fetch(new URL("/api/session/active", svc.url), { headers })).json()) as {
+        data: Record<string, unknown>;
+      }
+    ).data;
+  })();
+  for (const id of Object.keys(svcActive ?? {})) active.add(id);
+  await api.handle({ type: "refreshSessions" });
+  const candidate = api.viewState().sessions.find((x) => !active.has(x.id));
+  check("Found an existing idle session", !!candidate, candidate ? `${candidate.title}` : "none");
+  if (candidate) {
+    await api.handle({ type: "selectSession", id: candidate.id });
+    const st = api.viewState();
+    check(
+      "Session Title stays visible beside Current Task",
+      !!st.currentSession?.title && st.currentSession.title.length > 0,
+      st.currentSession?.title,
+    );
+    const msgs = await storedMessages(candidate.id);
+    const users = msgs.filter((m) => m.type === "user");
+    const task = st.task;
+    const stored = users.find((u) => u.id === task?.id);
+    check(
+      "Current Task is an actual stored prompt of the session",
+      !!task && !!stored && task.summary === summarizeTask(String(stored.text)),
+      `${task?.label} · ${task?.status} · “${task?.summary}”`,
+    );
+    await api.handle({ type: "getTaskPrompt" });
+    const saved = await vscode.env.clipboard.readText();
+    await api.handle({ type: "copyTaskPrompt", requestId: "t" });
+    const copied = await vscode.env.clipboard.readText();
+    await vscode.env.clipboard.writeText(saved);
+    check(
+      "Expanded prompt / Copy Prompt match the stored message exactly",
+      !!stored && copied === stored.text,
+      `${copied.length} chars, ${copied.split("\n").length} lines`,
+    );
+  }
+
+  // 2. Steer and queue on a read-only run (plan agent).
+  await api.handle({ type: "newSession" });
+  check("New session shows no task", api.viewState().task === null);
+  let since = events.length;
+  const mark = items(api).length;
+  await api.handle({
+    type: "send",
+    text: "Run the shell command `sleep 15` and wait for it. Then reply DONE. Do not modify anything.",
+  });
+  await waitFor(
+    "sleep running",
+    () =>
+      toolsSince(api, mark).find((t) => /sleep 15/.test(t.detail.command ?? "") && t.status === "running"),
+    180_000,
+  );
+  const taskId = api.viewState().task?.id;
+  await api.handle({
+    type: "send",
+    text: "Steer: afterwards also run `git --no-optional-locks status`.",
+    delivery: "steer",
+  });
+  await api.handle({
+    type: "send",
+    text: "Queued: then reply with the single word QUEUED.",
+    delivery: "queue",
+  });
+  await waitFor("next", () => api.viewState().task?.next ?? undefined, 15_000).catch(() => undefined);
+  check(
+    "Queued prompt shows as Next",
+    api.viewState().task?.next?.summary === "Queued: then reply with the single word QUEUED.",
+    JSON.stringify(api.viewState().task?.next),
+  );
+  await waitFor("steer", () => api.viewState().task?.steer ?? undefined, 120_000).catch(() => undefined);
+  check(
+    "Steer does not replace Current Task",
+    api.viewState().task?.id === taskId && /^Steer:/.test(api.viewState().task?.steer ?? ""),
+    JSON.stringify(api.viewState().task),
+  );
+  await waitFor(
+    "drained",
+    () =>
+      (!api.viewState().busy &&
+        api.viewState().pending.length === 0 &&
+        events.slice(since).some((e) => e.type === "session.idle")) ||
+      undefined,
+    240_000,
+  );
+
+  // 3. Budget stop keeps the task (read-only commands).
+  await vscode.workspace
+    .getConfiguration("opencodeSidebar")
+    .update("budget.small", { maxCost: 0, maxSteps: 3 }, vscode.ConfigurationTarget.Global);
+  await api.handle({ type: "selectBudget", level: "small" });
+  await api.handle({ type: "newSession" });
+  since = events.length;
+  await api.handle({
+    type: "send",
+    text: "Run these shell commands one at a time as separate tool calls: `echo 1`, `echo 2`, `echo 3`, `echo 4`, `echo 5`, `echo 6`. Then reply DONE. Do not modify anything.",
+  });
+  await waitFor(
+    "budget stop",
+    () => events.slice(since).find((e) => e.type === "budget" && e.state === "stopped"),
+    240_000,
+  );
+  await waitIdle(api, since, 60_000);
+  const t = api.viewState().task;
+  check(
+    "Budget stop does not lose the task",
+    t?.status === "budget-stopped" && t.summary.startsWith("Run these shell commands"),
+    JSON.stringify(t),
+  );
+  await api.handle({ type: "selectBudget", level: "off" });
+
+  // Read-only proof via OpenCode snapshots of this run's own sessions.
+  const changed: string[] = [];
+  for (const id of touchedSessions) {
+    if (candidate && id === candidate.id) continue; // pre-existing session, only viewed
+    await api.handle({ type: "selectSession", id });
+    await api.controller()?.refreshChanges();
+    const ac = api.viewState().agentChanges;
+    if (ac.status === "ok") changed.push(`${id}:${ac.files.map((f) => f.path).join(",")}`);
+  }
+  check("This run's sessions made no file changes (snapshot diff)", changed.length === 0, changed.join(" "));
 }
 
 function psHas(needle: string): boolean {
@@ -815,6 +1095,7 @@ export async function run(): Promise<void> {
   const scenario = process.env.ACCEPT_SCENARIO;
   try {
     if (scenario === "real-repo") await realRepo(api);
+    else if (scenario === "real-repo-task") await realRepoTask(api);
     else if (scenario === "fixture") await fixture(api);
     else if (scenario === "worktree") await worktree(api);
     else throw new Error(`unknown scenario ${scenario}`);

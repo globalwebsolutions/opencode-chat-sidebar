@@ -9,6 +9,7 @@ import * as vscode from "vscode";
 import { discoverExecutable } from "../core/cliDiscovery";
 import { chipFor, validateSelection } from "../core/context";
 import { classifyPath } from "../core/sensitive";
+import { decideNotification, type TaskNotice } from "../core/currentTask";
 import { SessionController } from "../core/sessionController";
 import { HttpOpenCodeClient, type EventSubscription } from "../opencode/client";
 import { discoverServer, startService } from "../opencode/service";
@@ -19,7 +20,7 @@ import {
   type ViewState,
   type WebviewMessage,
 } from "../shared/protocol";
-import { CONFIG_SECTION, readConfig } from "./config";
+import { CONFIG_SECTION, readConfig, readNotificationSettings } from "./config";
 import { openAgentDiffs, openAgentFileDiff, openAllDiffs, openFileDiff, type AgentSideSource } from "./diff";
 import type { Logger } from "./log";
 import { WorkspaceTracker } from "./workspace";
@@ -186,6 +187,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       pending: c?.pending ?? [],
       locale: uiLocale(),
       showPlacementHint: !this.context.globalState.get<boolean>(HINT_KEY, false),
+      task: c?.taskView() ?? null,
     };
   }
 
@@ -269,6 +271,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
           this.post({ type: "transcript", items });
         },
         onStateChanged: () => this.postState(),
+        onTaskNotice: (notice) => void this.showTaskNotice(notice),
       },
       this.log,
       () => {
@@ -624,6 +627,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       case "focusModelPicker":
         this.post({ type: "focusModel" });
         return;
+      case "getTaskPrompt": {
+        const prompt = c?.taskPrompt();
+        if (prompt) this.post({ type: "taskPrompt", id: prompt.id, text: prompt.text });
+        return;
+      }
+      case "copyTaskPrompt": {
+        const prompt = c?.taskPrompt();
+        if (!prompt) {
+          this.post({ type: "copyResult", requestId: msg.requestId, ok: false });
+          return;
+        }
+        return this.copy(msg.requestId, prompt.text);
+      }
       case "dismissHint":
         await this.context.globalState.update(HINT_KEY, true);
         this.postState();
@@ -645,6 +661,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         return;
     }
   }
+
+  /** Native VS Code notification for a task milestone; "Open Chat" reveals the sidebar. */
+  private async showTaskNotice(notice: TaskNotice): Promise<void> {
+    const decision = decideNotification(notice, readNotificationSettings(), {
+      viewVisible: !!this.view?.visible,
+      windowFocused: vscode.window.state.focused,
+    });
+    if (!decision.show) return;
+    this.log.info(`Notification (${notice.kind}) shown`);
+    const choice = await this.notifier(decision.severity, decision.message, ["Open Chat"]);
+    if (choice === "Open Chat") await this.focus();
+  }
+
+  /** Replaceable for tests; defaults to VS Code's native notifications. */
+  notifier: (
+    severity: "info" | "warning" | "error",
+    message: string,
+    actions: string[],
+  ) => Thenable<string | undefined> = (severity, message, actions) =>
+    severity === "error"
+      ? vscode.window.showErrorMessage(message, ...actions)
+      : severity === "warning"
+        ? vscode.window.showWarningMessage(message, ...actions)
+        : vscode.window.showInformationMessage(message, ...actions);
 
   private async copy(requestId: string, text: string): Promise<void> {
     try {
@@ -746,6 +786,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       viewState: () => this.viewState(),
       handle: (msg: WebviewMessage) => this.handle(msg),
       ensureStarted: () => this.ensureStarted(),
+      setNotifier: (fn: ChatViewProvider["notifier"]) => {
+        this.notifier = fn;
+      },
+      viewVisible: () => !!this.view?.visible,
       tap: (fn: (events: UiEvent[]) => void) => {
         this.taps.add(fn);
         return { dispose: () => this.taps.delete(fn) };

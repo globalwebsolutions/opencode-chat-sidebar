@@ -418,6 +418,7 @@ export class HttpOpenCodeClient implements OpenCodeClient {
       out.push({
         id: inboxId,
         text: str(payload.text) ?? "",
+        raw: str(payload.text) ?? "",
         attachments: files.map((f) => str(rec(f).name) ?? "file"),
         delivery: r.delivery === "queue" ? "queue" : "steer",
       });

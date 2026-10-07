@@ -18,6 +18,7 @@ OpenCode is usually driven from its terminal UI, desktop app or API. This extens
 
 - Streaming chat with Markdown, tables and code blocks.
 - New sessions, plus recent sessions for the current workspace (history comes from OpenCode).
+- A **Current Task** bar under the session title shows the prompt the agent is working on. Expand it to read or copy the full prompt.
 - Model picker grouped by provider, an agent picker (for example Build / Plan), and a **Variant** picker (such as reasoning effort) when OpenCode lists variants for the model.
 - Git branch and repository type in the header, with a warning when you work in a secondary Git worktree.
 
@@ -35,6 +36,7 @@ OpenCode is usually driven from its terminal UI, desktop app or API. This extens
 - **Steer** a running task or **Queue** the next instruction.
 - **Budget Guard** to stop runaway agent loops.
 - Context, cost and step figures, as reported by OpenCode.
+- Native VS Code **notifications** when a task completes, needs your input, fails or is stopped by Budget Guard.
 
 **Results**
 
@@ -59,6 +61,29 @@ OpenCode is usually driven from its terminal UI, desktop app or API. This extens
 6. Pick a model and an agent, then type your message.
 
 **Recommended layout:** drag the OpenCode icon to the **Secondary Side Bar** (the right side), or right-click it and choose **Move To → Secondary Side Bar**. The chat then sits beside your editor and the Explorer stays on the left. The extension shows this tip once and never moves your layout itself.
+
+## Current Task
+
+The session title says what the session is about. The **Current Task** bar under it says which instruction the agent is working on right now.
+
+- The summary is taken locally from your own prompt, with no extra model call. It uses the first meaningful line (skipping greetings, "Repository:"-style labels, metadata and bare paths) or an explicit "Task:" / "Your assignment:" line after a "You are …" intro.
+- Click the bar to see the full original prompt in a scrollable area. **Copy Prompt** copies it exactly as sent, including Markdown, code blocks and attached selections.
+- **Status** comes only from OpenCode's own state: Running, Waiting for you (a question or permission is pending), Completed, Stopped, Stopped — budget reached, or Failed.
+- When the run ends the bar reads **Last task** until you send the next prompt. A new, empty session shows no task.
+- A **Steer** message doesn't replace the task. It appears underneath as _Latest steer_. The next **queued** message appears as _Next_ (with "+N queued" when there are more), and becomes the Current Task once OpenCode delivers it.
+- **Continue once** after a Budget Guard stop continues the same task.
+- Reopening a session restores its task from the messages OpenCode stored.
+
+## Notifications
+
+OpenCode Chat Sidebar uses VS Code's normal notifications, each with an **Open Chat** action:
+
+- ✅ the task completed (not shown while you're watching the chat: view visible and VS Code focused)
+- ❓ OpenCode needs your input (a question or permission request), always shown
+- ❌ the task failed
+- ⛔ Budget Guard stopped the task
+
+Messages use the Current Task summary. A task you stop yourself is never reported as completed, and reopening a session doesn't repeat old notifications. Each type can be turned off in Settings.
 
 ## Copying responses
 
@@ -156,6 +181,10 @@ The extension adds no default keyboard shortcuts. You can bind these commands in
 | `opencodeSidebar.budget.small/medium/large/custom` | see table above | `{ "maxCost": USD, "maxSteps": n }`; `0` disables that metric.                     |
 | `opencodeSidebar.budget.warnPercent`               | `80`            | Warn at this share of the budget.                                                  |
 | `opencodeSidebar.budget.contextWarnPercent`        | `80`            | Warn when the context window is this full; `0` turns the warning off.              |
+| `opencodeChat.notifications.taskComplete`          | `true`          | Notify when a task completes (suppressed while you are watching the chat).         |
+| `opencodeChat.notifications.needsInput`            | `true`          | Notify when OpenCode needs your input.                                             |
+| `opencodeChat.notifications.taskFailed`            | `true`          | Notify when a task fails.                                                          |
+| `opencodeChat.notifications.budgetStopped`         | `true`          | Notify when Budget Guard stops a task.                                             |
 
 ## Privacy
 

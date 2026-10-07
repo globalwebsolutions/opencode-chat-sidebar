@@ -171,6 +171,8 @@ export type InboxDelivery = "steer" | "queue";
 export interface PendingInboxItem {
   id: string;
   text: string;
+  /** Exact original text, when known. */
+  raw?: string;
   attachments: string[];
   delivery: InboxDelivery;
 }
@@ -268,7 +270,14 @@ export type ToolCategory = "read" | "search" | "shell" | "edit" | "web" | "agent
  * events by src/opencode/events.ts and from local actions by the host.
  */
 export type UiEvent =
-  | { type: "user.message"; id: string; text: string; attachments: string[] }
+  | {
+      type: "user.message";
+      id: string;
+      text: string;
+      attachments: string[];
+      /** Exact original prompt (including inline selection snippets); used for Current Task / Copy Prompt. */
+      raw?: string;
+    }
   | { type: "assistant.delta"; partId: string; delta: string }
   | { type: "assistant.completed"; partId: string; text: string }
   | { type: "reasoning.delta"; partId: string; delta: string }
@@ -297,7 +306,14 @@ export type UiEvent =
   | { type: "session.idle"; outcome: "succeeded" | "failed" | "interrupted" }
   | { type: "session.error"; message: string; error: RawError | null; modelKey: string | null }
   | { type: "error"; id: string; title: string; detail: string; actions: ErrorAction[] }
-  | { type: "inbox.enqueued"; id: string; text: string; attachments: string[]; delivery: InboxDelivery }
+  | {
+      type: "inbox.enqueued";
+      id: string;
+      text: string;
+      attachments: string[];
+      delivery: InboxDelivery;
+      raw?: string;
+    }
   | { type: "inbox.delivered"; id: string }
   | { type: "inbox.cancelled"; id: string }
   | { type: "inbox.delivery"; id: string; delivery: InboxDelivery }

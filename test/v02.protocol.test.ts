@@ -60,7 +60,14 @@ describe("v0.2 event normalization", () => {
       },
     });
     assert.deepEqual(e?.events, [
-      { type: "inbox.enqueued", id: "msg_1", text: "Queued: x", attachments: [], delivery: "queue" },
+      {
+        type: "inbox.enqueued",
+        id: "msg_1",
+        text: "Queued: x",
+        attachments: [],
+        delivery: "queue",
+        raw: "Queued: x",
+      },
     ]);
     assert.deepEqual(
       n.normalize({ type: "session.inbox.delivered", data: { sessionID: "s", inboxID: "msg_1" } })?.events,
@@ -174,7 +181,7 @@ describe("v0.2 client requests", () => {
     await client.cancelForm("ses_1", "frm_1");
     assert.equal(captured.at(-1)?.method, "DELETE");
     assert.deepEqual(await client.listInbox("ses_1"), [
-      { id: "msg_1", text: "later", attachments: ["a.ts"], delivery: "queue" },
+      { id: "msg_1", text: "later", raw: "later", attachments: ["a.ts"], delivery: "queue" },
     ]);
     await client.cancelInbox("ses_1", "msg_1");
     assert.deepEqual(captured.at(-1), {

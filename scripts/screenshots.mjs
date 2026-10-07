@@ -132,6 +132,16 @@ const base = (o = {}) => ({
   pending: [],
   locale: "en",
   showPlacementHint: false,
+  task: {
+    id: "t",
+    label: "current",
+    summary: "Fix checkout total rounding and add a regression test",
+    status: "running",
+    steer: null,
+    next: null,
+    chars: 120,
+    lines: 3,
+  },
   ...o,
 });
 const report =
@@ -179,6 +189,16 @@ const scenes = {
         allowance: 1,
       },
       steps: 20,
+      task: {
+        id: "t2",
+        label: "last",
+        summary: "Refactor every module to the new logger",
+        status: "budget-stopped",
+        steer: null,
+        next: null,
+        chars: 40,
+        lines: 1,
+      },
     }),
     items: [
       { kind: "user", id: "u1", text: "Refactor every module to the new logger.", attachments: [] },
@@ -288,6 +308,16 @@ const scenes = {
       pending: [
         { id: "q", text: "After that, run only the cart tests.", attachments: [], delivery: "queue" },
       ],
+      task: {
+        id: "t4",
+        label: "current",
+        summary: "Add a currency formatter for the receipt",
+        status: "waiting",
+        steer: "Keep the existing receipt layout.",
+        next: { summary: "After that, run only the cart tests.", more: 0 },
+        chars: 41,
+        lines: 1,
+      },
     }),
     items: [
       { kind: "user", id: "u1", text: "Add a currency formatter for the receipt.", attachments: [] },

@@ -109,7 +109,7 @@ async function runScenario(
   const shortTmp = process.platform === "win32" ? os.tmpdir() : "/tmp";
   const userData = fs.mkdtempSync(path.join(shortTmp, `ocs-${scenario.slice(0, 3)}-`));
   userDataDirs.push(userData);
-  if (scenario === "real-repo") {
+  if (scenario.startsWith("real-repo")) {
     // Keep VS Code's Git extension out of a repository someone else may be working in.
     fs.mkdirSync(path.join(userData, "User"), { recursive: true });
     fs.writeFileSync(
@@ -176,15 +176,22 @@ async function main(): Promise<void> {
 
   const real = process.env.ACCEPT_REAL_REPO;
   if (real) {
-    const concurrentBefore = await activeSessionsIn(real);
-    const before = fingerprint(real);
-    const r = await runScenario("real-repo", real, base);
-    const after = fingerprint(real);
-    const concurrent = [...new Set([...concurrentBefore, ...(await activeSessionsIn(real))])];
-    // With another agent working in the repository, the fingerprint cannot prove anything about
-    // this run; the suite instead verifies OpenCode's snapshot diff of every session it created.
-    summary.realRepo = { ...r, repositoryUnchanged: before === after, concurrentSessions: concurrent };
-    if (!r.ok || (before !== after && concurrent.length === 0)) failed = true;
+    if (process.env.ACCEPT_REAL_TASK) {
+      const r = await runScenario("real-repo-task", real, base);
+      summary.realRepoTask = r;
+      if (!r.ok) failed = true;
+    }
+    if (!process.env.ACCEPT_REAL_TASK_ONLY) {
+      const concurrentBefore = await activeSessionsIn(real);
+      const before = fingerprint(real);
+      const r = await runScenario("real-repo", real, base);
+      const after = fingerprint(real);
+      const concurrent = [...new Set([...concurrentBefore, ...(await activeSessionsIn(real))])];
+      // With another agent working in the repository, the fingerprint cannot prove anything about
+      // this run; the suite instead verifies OpenCode's snapshot diff of every session it created.
+      summary.realRepo = { ...r, repositoryUnchanged: before === after, concurrentSessions: concurrent };
+      if (!r.ok || (before !== after && concurrent.length === 0)) failed = true;
+    }
   }
   for (const [name, ws] of (process.env.ACCEPT_ONLY_REAL
     ? []

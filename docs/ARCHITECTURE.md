@@ -74,6 +74,17 @@ Context is always explicit (`src/core/context.ts`):
 - The extension starts OpenCode only on explicit **Start OpenCode** (or `autoStart`), and only through `opencode service start`. OpenCode guarantees a single shared service, so repeated clicks cannot create duplicate processes; concurrent start requests are also coalesced. The service is shared with other OpenCode clients and is not stopped when VS Code closes.
 - The event stream reconnects with backoff. After a reconnect the open session is reloaded from history to close any gap.
 
+## Current Task and notifications (0.2.1)
+
+- `src/core/currentTask.ts` holds the local summary heuristic, the history derivation used when a session is reopened, and `decideNotification`.
+- `SessionController` classifies each delivered user message as one of three kinds:
+  - **new task:** sent while idle or queued
+  - **steer:** steering delivery during a run
+  - **continuation:** Budget Guard's fixed continue text
+- On reopen, stored messages are classified the same way. Within one execution, a user message that follows a step finishing with `stop` is a queued follow-up; one that follows a `tool-calls` step is a steer.
+- The exact original prompt travels as `raw` on user/inbox events. The webview fetches it only when the bar is expanded (`getTaskPrompt`), and Copy Prompt copies it from the host (`copyTaskPrompt`).
+- Task milestones reach the host as `onTaskNotice` and are shown with VS Code's native notifications. Replayed history never produces notices, and each notice key is shown at most once.
+
 ## v0.2 additions
 
 The layering is unchanged. New logic lives in VS Code-free core modules:

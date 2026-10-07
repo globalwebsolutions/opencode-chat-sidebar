@@ -67,6 +67,10 @@ const formErrors = new Map<string, string>();
 /** In-progress (unsent) form answers, so re-renders do not lose user input. */
 const formDrafts = new Map<string, FormAnswer>();
 let requestSeq = 0;
+let taskExpanded = false;
+let taskExpandedId: string | null = null;
+let taskPrompt: { id: string; text: string } | null = null;
+const TASK_KEY = "__task";
 
 const persisted = vscode.getState() as { draft?: string; delivery?: InboxDelivery } | undefined;
 if (persisted?.draft) draft = persisted.draft;
@@ -82,6 +86,7 @@ function persist() {
 
 const app = document.getElementById("app")!;
 const headerEl = h("header", { className: "header" });
+const taskEl = h("section", { className: "task-bar", "aria-label": "Current task", hidden: true });
 const bannerEl = h("div", { className: "banners" });
 const sessionsEl = h("section", { className: "sessions", "aria-label": "Recent sessions", hidden: true });
 const statusLive = h("div", { className: "sr-only", "aria-live": "polite", role: "status" });
@@ -97,7 +102,7 @@ scroller.append(emptyEl, listEl);
 const changesEl = h("section", { className: "changes", "aria-label": "Changed files" });
 const pendingEl = h("section", { className: "pending", "aria-label": "Pending messages" });
 const composerEl = h("footer", { className: "composer" });
-app.append(headerEl, bannerEl, sessionsEl, scroller, changesEl, pendingEl, composerEl, statusLive);
+app.append(headerEl, taskEl, bannerEl, sessionsEl, scroller, changesEl, pendingEl, composerEl, statusLive);
 
 // Composer is built once so focus/caret survive state updates.
 const chipsEl = h("div", { className: "chips", "aria-label": "Attached context" });
@@ -198,10 +203,15 @@ function stop() {
   send({ type: "stop" });
 }
 
-function copy(key: string, itemId: string, msg: { kind: "message" } | { kind: "code"; text: string }) {
+function copy(
+  key: string,
+  itemId: string,
+  msg: { kind: "message" } | { kind: "code"; text: string } | { kind: "prompt" },
+) {
   const requestId = `c${++requestSeq}`;
   copyRequests.set(requestId, { key, itemId });
   if (msg.kind === "message") send({ type: "copyMessage", itemId, requestId });
+  else if (msg.kind === "prompt") send({ type: "copyTaskPrompt", requestId });
   else send({ type: "copy", text: msg.text, requestId });
 }
 
@@ -585,6 +595,140 @@ function renderHeader(s: ViewState) {
     );
   }
   bannerEl.replaceChildren(...banners);
+}
+
+// ------------------------------------------------------------- current task
+
+const STATUS_KEYS = {
+  running: "statusRunning",
+  waiting: "statusWaiting",
+  completed: "statusCompleted",
+  stopped: "statusStopped",
+  "budget-stopped": "statusBudget",
+  failed: "statusFailed",
+} as const;
+
+let taskSignature = "";
+
+function renderTask(s: ViewState) {
+  const task = s.task;
+  // Skip identical re-renders (state is pushed often while the agent runs) so the
+  // expanded prompt keeps its scroll position and focus.
+  const signature = JSON.stringify([
+    task,
+    taskExpanded,
+    taskPrompt?.id,
+    taskPrompt?.text.length,
+    copyFeedback.get(TASK_KEY),
+    s.locale,
+  ]);
+  if (signature === taskSignature) return;
+  taskSignature = signature;
+  const active = document.activeElement;
+  const focusKey = active instanceof HTMLElement && taskEl.contains(active) ? active.dataset.key : undefined;
+  const prevScroll = (taskEl.querySelector(".task-prompt") as HTMLElement | null)?.scrollTop ?? 0;
+  taskEl.hidden = !task;
+  if (!task) {
+    taskEl.replaceChildren();
+    taskExpanded = false;
+    return;
+  }
+  if (taskExpandedId !== task.id) {
+    // A new task starts collapsed.
+    taskExpanded = false;
+    taskExpandedId = task.id;
+  }
+  const label = task.label === "current" ? t("currentTask") : t("lastTask");
+  const status = task.status ? t(STATUS_KEYS[task.status]) : null;
+  const toggle = h(
+    "button",
+    {
+      className: "task-toggle",
+      "aria-expanded": String(taskExpanded),
+      "aria-controls": "task-prompt",
+      "data-testid": "task-toggle",
+      "data-key": "task-toggle",
+      title: taskExpanded ? "Hide the full prompt" : "Show the full prompt",
+      onclick: () => {
+        taskExpanded = !taskExpanded;
+        if (taskExpanded && taskPrompt?.id !== task.id) send({ type: "getTaskPrompt" });
+        renderTask(s);
+      },
+    },
+    h(
+      "span",
+      { className: "task-head" },
+      h("span", { className: "task-label" }, label.toUpperCase()),
+      status
+        ? h("span", { className: `task-status task-${task.status}`, "data-testid": "task-status" }, status)
+        : null,
+    ),
+    h(
+      "span",
+      { className: "task-line" },
+      h("span", { className: "task-summary", dir: "auto", "data-testid": "task-summary" }, task.summary),
+      h("span", { className: "task-caret", "aria-hidden": "true" }, taskExpanded ? "▴" : "▾"),
+    ),
+  );
+  const parts: Array<Node | null> = [toggle];
+  if (task.steer) {
+    parts.push(
+      h(
+        "div",
+        { className: "task-sub", dir: "auto", "data-testid": "task-steer" },
+        `${t("latestSteer")}: “${task.steer}”`,
+      ),
+    );
+  }
+  if (task.next) {
+    parts.push(
+      h(
+        "div",
+        { className: "task-sub", dir: "auto", "data-testid": "task-next" },
+        `${t("next")}: ${task.next.summary}`,
+        task.next.more > 0 ? h("span", { className: "task-more" }, ` +${task.next.more} queued`) : null,
+      ),
+    );
+  }
+  if (taskExpanded) {
+    const text = taskPrompt?.id === task.id ? taskPrompt.text : null;
+    parts.push(
+      h(
+        "div",
+        { className: "task-details", id: "task-prompt" },
+        h(
+          "div",
+          { className: "row task-details-head" },
+          h("span", { className: "selector-label" }, t("currentPrompt")),
+          h(
+            "span",
+            { className: "muted small" },
+            `${task.lines} line${task.lines === 1 ? "" : "s"} · ${task.chars.toLocaleString()} chars`,
+          ),
+          copyButton(
+            TASK_KEY,
+            t("copyPrompt"),
+            t("copyPrompt"),
+            text === null,
+            () => copy(TASK_KEY, TASK_KEY, { kind: "prompt" }),
+            "copy-prompt",
+          ),
+        ),
+        h(
+          "pre",
+          { className: "task-prompt", dir: "auto", tabindex: "0", "data-testid": "task-prompt" },
+          text ?? "Loading…",
+        ),
+      ),
+    );
+  }
+  taskEl.replaceChildren(...nonNull(parts));
+  const pre = taskEl.querySelector(".task-prompt") as HTMLElement | null;
+  if (pre) pre.scrollTop = prevScroll;
+  if (focusKey)
+    Array.from(taskEl.querySelectorAll<HTMLElement>("[data-key]"))
+      .find((n) => n.dataset.key === focusKey)
+      ?.focus();
 }
 
 // ---------------------------------------------------------------- sessions
@@ -1694,6 +1838,7 @@ let lastBusy: boolean | null = null;
 function render() {
   if (!state) return;
   renderHeader(state);
+  renderTask(state);
   renderSessions(state);
   renderEmpty(state);
   renderChanges(state);
@@ -1754,6 +1899,10 @@ window.addEventListener("message", (e: MessageEvent) => {
       autosize();
       input.focus();
       break;
+    case "taskPrompt":
+      taskPrompt = { id: msg.id, text: msg.text };
+      if (state) renderTask(state);
+      break;
     case "formError":
       formErrors.set(msg.formId, msg.error);
       scheduleItems([`form:${msg.formId}`]);
@@ -1763,10 +1912,15 @@ window.addEventListener("message", (e: MessageEvent) => {
       if (!req) break;
       copyRequests.delete(msg.requestId);
       copyFeedback.set(req.key, msg.ok ? "copied" : "failed");
-      renderItemById(req.itemId);
+      const rerender = () => {
+        if (req.itemId === TASK_KEY) {
+          if (state) renderTask(state);
+        } else renderItemById(req.itemId);
+      };
+      rerender();
       setTimeout(() => {
         copyFeedback.delete(req.key);
-        renderItemById(req.itemId);
+        rerender();
       }, 1800);
       break;
     }

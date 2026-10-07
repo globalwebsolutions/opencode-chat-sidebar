@@ -298,7 +298,9 @@ describe("steering and queued messages", () => {
         item: { type: "user", payload: { text: "Queued text" }, delivery: "queue" },
       }),
     );
-    assert.deepEqual(c.pending, [{ id: "msg_q", text: "Queued text", attachments: [], delivery: "queue" }]);
+    assert.deepEqual(c.pending, [
+      { id: "msg_q", text: "Queued text", raw: "Queued text", attachments: [], delivery: "queue" },
+    ]);
     assert.equal(c.transcript.has("user:msg_q"), false);
     c.handleRawEvent(raw("session.inbox.delivered", { sessionID: "ses_1", inboxID: "msg_q" }));
     assert.equal(c.pending.length, 0);

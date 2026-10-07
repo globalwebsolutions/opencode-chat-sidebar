@@ -104,6 +104,7 @@ export function baseState(over: Partial<ViewState> = {}): ViewState {
     pending: [],
     locale: "en",
     showPlacementHint: false,
+    task: null,
     ...over,
   };
 }
@@ -582,6 +583,136 @@ describe(
       );
     });
 
+    // ------------------------------------------------------------ current task
+
+    const TASK = {
+      id: "u2",
+      label: "current" as const,
+      summary: "Release Closure Verification",
+      status: "running" as const,
+      steer: null,
+      next: null,
+      chars: 0,
+      lines: 0,
+    };
+
+    it("hides the task bar for an empty session and keeps the session title separate", async () => {
+      assert.equal(await page.$eval(".task-bar", (e) => (e as HTMLElement).hidden), true);
+      await host({
+        type: "state",
+        state: baseState({ currentSession: { id: "ses_1", title: "Project M16" }, task: TASK }),
+      });
+      assert.equal(await page.$eval(".task-bar", (e) => (e as HTMLElement).hidden), false);
+      assert.equal(await text(".session-title"), "Project M16");
+      assert.equal(await text('[data-testid="task-summary"]'), "Release Closure Verification");
+      assert.match(await text(".task-label"), /CURRENT TASK/);
+      assert.equal(await text('[data-testid="task-status"]'), "Running");
+    });
+
+    it("labels a finished task as Last Task with its status", async () => {
+      await host({
+        type: "state",
+        state: baseState({ task: { ...TASK, label: "last", status: "budget-stopped" } }),
+      });
+      assert.match(await text(".task-label"), /LAST TASK/);
+      assert.equal(await text('[data-testid="task-status"]'), "Stopped — budget reached");
+    });
+
+    it("expands on click, shows the exact full prompt in a scrollable area, and copies it", async () => {
+      const prompt = [
+        "Close the release checklist only.",
+        "",
+        "Repository:",
+        "/projects/x",
+        "",
+        "```ts",
+        "const a = 1;",
+        "```",
+        ...Array.from({ length: 800 }, (_, i) => `- line ${i}`),
+      ].join("\n");
+      await host({
+        type: "state",
+        state: baseState({ task: { ...TASK, chars: prompt.length, lines: prompt.split("\n").length } }),
+      });
+      assert.equal(await page.$('[data-testid="task-prompt"]'), null, "collapsed by default");
+      await page.click('[data-testid="task-toggle"]');
+      assert.ok(await lastSent("getTaskPrompt"), "full prompt fetched on demand only");
+      assert.equal(
+        await page.$eval('[data-testid="task-toggle"]', (b) => b.getAttribute("aria-expanded")),
+        "true",
+      );
+      await host({ type: "taskPrompt", id: "u2", text: prompt });
+      assert.equal(
+        await page.$eval('[data-testid="task-prompt"]', (p) => (p as HTMLElement).textContent),
+        prompt,
+      );
+      const box = await page.$eval('[data-testid="task-prompt"]', (p) => ({
+        client: p.clientHeight,
+        scroll: p.scrollHeight,
+        vh: window.innerHeight,
+      }));
+      assert.ok(
+        box.scroll > box.client && box.client <= box.vh * 0.4,
+        `scrollable, bounded height ${JSON.stringify(box)}`,
+      );
+      // Keeps the scroll position across state pushes while the agent runs.
+      await page.$eval('[data-testid="task-prompt"]', (p) => ((p as HTMLElement).scrollTop = 500));
+      await host({
+        type: "state",
+        state: baseState({
+          task: { ...TASK, chars: prompt.length, lines: prompt.split("\n").length },
+          steps: 15,
+        }),
+      });
+      assert.equal(await page.$eval('[data-testid="task-prompt"]', (p) => (p as HTMLElement).scrollTop), 500);
+      await page.click('[data-testid="copy-prompt"]');
+      const req = await lastSent("copyTaskPrompt");
+      assert.ok(req, "copies the canonical prompt from the host (not the DOM)");
+      await host({ type: "copyResult", requestId: String(req?.requestId), ok: true });
+      assert.equal(await text('[data-testid="copy-prompt"]'), "✓ Copied");
+      await page.click('[data-testid="task-toggle"]');
+      assert.equal(await page.$('[data-testid="task-prompt"]'), null, "collapses again");
+    });
+
+    it("shows the latest steer subtly and the next queued message with a count", async () => {
+      await host({
+        type: "state",
+        state: baseState({
+          task: {
+            ...TASK,
+            steer: "Do not touch Finance yet.",
+            next: { summary: "Run the targeted PostgreSQL tests", more: 2 },
+          },
+        }),
+      });
+      assert.equal(await text('[data-testid="task-steer"]'), "Latest steer: “Do not touch Finance yet.”");
+      assert.equal(
+        await text('[data-testid="task-next"]'),
+        "Next: Run the targeted PostgreSQL tests +2 queued",
+      );
+      assert.equal(
+        await text('[data-testid="task-summary"]'),
+        "Release Closure Verification",
+        "steer does not replace the task",
+      );
+    });
+
+    it("renders Arabic task summaries right-to-left and stays within the sidebar width", async () => {
+      await host({
+        type: "state",
+        state: baseState({ locale: "ar", task: { ...TASK, summary: "أغلق المرحلة ب/ج فقط ".repeat(6) } }),
+      });
+      assert.equal(
+        await page.$eval('[data-testid="task-summary"]', (e) => getComputedStyle(e).direction),
+        "rtl",
+      );
+      assert.match(await text(".task-label"), /المهمة الحالية/);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      assert.ok(overflow <= 0, `overflow ${overflow}`);
+    });
+
     it("is usable in a high-contrast theme without horizontal overflow", async () => {
       await page.evaluate(() => {
         document.body.classList.add("vscode-high-contrast");
@@ -615,7 +746,20 @@ describe(
       });
       await host({
         type: "state",
-        state: baseState({ busy: true, budget: { ...baseState().budget, active: true, state: "warning" } }),
+        state: baseState({
+          busy: true,
+          budget: { ...baseState().budget, active: true, state: "warning" },
+          task: {
+            id: "u",
+            label: "current",
+            summary: "Release Closure Verification",
+            status: "running",
+            steer: "Do not touch Finance yet.",
+            next: { summary: "Run tests", more: 1 },
+            chars: 10,
+            lines: 1,
+          },
+        }),
       });
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,

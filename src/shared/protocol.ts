@@ -56,6 +56,17 @@ export interface ViewState {
   locale: "en" | "ar";
   /** One-time tip about moving the view to the Secondary Side Bar. */
   showPlacementHint: boolean;
+  /** Current / Last Task bar; null for an empty session. The full prompt is fetched on demand. */
+  task: {
+    id: string;
+    label: "current" | "last";
+    summary: string;
+    status: "running" | "waiting" | "completed" | "stopped" | "budget-stopped" | "failed" | null;
+    steer: string | null;
+    next: { summary: string; more: number } | null;
+    chars: number;
+    lines: number;
+  } | null;
 }
 
 export type HostMessage =
@@ -66,7 +77,8 @@ export type HostMessage =
   | { type: "copyResult"; requestId: string; ok: boolean }
   | { type: "restoreInput"; text: string }
   | { type: "formError"; formId: string; error: string }
-  | { type: "focusModel" };
+  | { type: "focusModel" }
+  | { type: "taskPrompt"; id: string; text: string };
 
 export type WebviewMessage =
   | { type: "ready" }
@@ -101,6 +113,8 @@ export type WebviewMessage =
   | { type: "retryLast" }
   | { type: "focusModelPicker" }
   | { type: "dismissHint" }
+  | { type: "getTaskPrompt" }
+  | { type: "copyTaskPrompt"; requestId: string }
   | { type: "openLink"; href: string }
   | { type: "startOpenCode" }
   | { type: "retry" }
@@ -171,6 +185,8 @@ const VALIDATORS: Record<WebviewMessage["type"], Validator> = {
   retryLast: () => true,
   focusModelPicker: () => true,
   dismissHint: () => true,
+  getTaskPrompt: () => true,
+  copyTaskPrompt: (m) => isStr(m.requestId, 64),
   openLink: (m) => isStr(m.href, 4096),
   startOpenCode: () => true,
   retry: () => true,
@@ -198,6 +214,7 @@ const ALLOWED_KEYS: Partial<Record<WebviewMessage["type"], string[]>> = {
   editPending: ["id"],
   removePending: ["id"],
   openAgentDiff: ["path"],
+  copyTaskPrompt: ["requestId"],
   openLink: ["href"],
 };
 

@@ -28,6 +28,18 @@ const EN = {
   agentDiffUnavailable: "Agent-only diff unavailable",
   changeModel: "Change model",
   retry: "Retry",
+  currentTask: "Current task",
+  lastTask: "Last task",
+  currentPrompt: "Current prompt",
+  copyPrompt: "Copy Prompt",
+  latestSteer: "Latest steer",
+  next: "Next",
+  statusRunning: "Running",
+  statusWaiting: "Waiting for you",
+  statusCompleted: "Completed",
+  statusStopped: "Stopped",
+  statusBudget: "Stopped — budget reached",
+  statusFailed: "Failed",
 };
 
 const AR: Partial<typeof EN> = {
@@ -50,6 +62,12 @@ const AR: Partial<typeof EN> = {
   cancel: "إلغاء",
   changeModel: "تغيير النموذج",
   retry: "إعادة المحاولة",
+  currentTask: "المهمة الحالية",
+  lastTask: "آخر مهمة",
+  currentPrompt: "الطلب الحالي",
+  copyPrompt: "نسخ الطلب",
+  latestSteer: "آخر توجيه",
+  next: "التالي",
 };
 
 export type StringKey = keyof typeof EN;

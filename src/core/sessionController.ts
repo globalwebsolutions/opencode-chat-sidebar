@@ -5,6 +5,14 @@
 
 import { BudgetTracker, nextLevel, type BudgetSettings } from "./budget";
 import { buildPrompt, type PromptPayload } from "./context";
+import {
+  CONTINUE_TEXT,
+  deriveTaskFromHistory,
+  summarizeTask,
+  type TaskNotice,
+  type TaskRecord,
+  type TaskStatus,
+} from "./currentTask";
 import { classifyError, describeForLog } from "./errors";
 import { summarizeAnswer, validateAnswer } from "./forms";
 import { reconstructSides, type FileSides } from "./patch";
@@ -45,6 +53,20 @@ export interface ControllerSink {
   onEvents(events: UiEvent[]): void;
   onTranscriptReset(items: TranscriptItem[]): void;
   onStateChanged(): void;
+  /** Live task milestones (never emitted for replayed history). */
+  onTaskNotice?(notice: TaskNotice): void;
+}
+
+/** What the sidebar shows for the Current / Last Task. */
+export interface TaskView {
+  id: string;
+  label: "current" | "last";
+  summary: string;
+  status: TaskStatus | "waiting" | null;
+  steer: string | null;
+  next: { summary: string; more: number } | null;
+  chars: number;
+  lines: number;
 }
 
 export interface ControllerDefaults {
@@ -130,6 +152,15 @@ export class SessionController {
   private errorSeq = 0;
   private budgetSeq = 0;
   private disposed = false;
+  /** Current / last task (see src/core/currentTask.ts). */
+  task: TaskRecord | null = null;
+  /** True between session.execution.started and its idle marker (from OpenCode events). */
+  private execActive = false;
+  private execSeq = 0;
+  private taskStopReason: "budget" | null = null;
+  /** Whether a pending inbox item will start a new task when delivered. */
+  private pendingStartsTask = new Map<string, boolean>();
+  private notified = new Set<string>();
   /** Folder whose catalog is currently being loaded (guards against duplicate reloads). */
   private loadingDirectory: string | null = null;
   /** Controller-generated events (budget/context) raised while applying a batch; flushed after it. */
@@ -357,6 +388,10 @@ export class SessionController {
     this.lastPayload = null;
     this.firstUserText = null;
     this.deliveredEarly.clear();
+    this.task = null;
+    this.execActive = false;
+    this.taskStopReason = null;
+    this.pendingStartsTask.clear();
     this.budget.reset();
     clearTimeout(this.stopTimer);
     this.transcript.reset();
@@ -389,15 +424,18 @@ export class SessionController {
       this.sessionCost = summary.cost;
       this.busy = active.has(id);
       for (const ev of historyToEvents(messages)) this.applyLocal(ev, true);
+      // Pending requests are restored silently: reopening never replays notifications.
       for (const request of permissions) {
-        this.applyLocal({
-          type: "permission.requested",
-          request,
-          sensitive: describeSensitive(request.resources),
-        });
+        this.applyLocal(
+          { type: "permission.requested", request, sensitive: describeSensitive(request.resources) },
+          true,
+        );
       }
-      for (const form of forms) this.applyLocal({ type: "form.requested", form });
+      for (const form of forms) this.applyLocal({ type: "form.requested", form }, true);
       this.pending = inbox;
+      this.execActive = this.busy;
+      this.task = deriveTaskFromHistory(messages, this.busy);
+      for (const item of inbox) this.pendingStartsTask.set(item.id, item.delivery === "queue");
       if (this.busy) this.budget.startTask(this.sessionCost);
       if (summary.modelKey && this.models?.some((m) => m.key === summary.modelKey)) {
         this.selectedModel = summary.modelKey;
@@ -553,8 +591,11 @@ export class SessionController {
           { type: "user", id: res.id, text: payload.text, files: payload.files },
         ]);
         if (ev?.type === "user.message") {
-          if (this.deliveredEarly.has(res.id) || !wasBusy) this.emit([ev]);
-          else
+          if (this.deliveredEarly.has(res.id) || !wasBusy) {
+            this.deliveredEarly.delete(res.id);
+            this.trackUserMessage(res.id, payload.text, !wasBusy || delivery === "queue");
+            this.emit([{ ...ev, raw: payload.text }]);
+          } else
             this.emit([
               {
                 type: "inbox.enqueued",
@@ -722,7 +763,7 @@ export class SessionController {
     this.budget.continueOnce();
     this.emit([{ type: "budget.resolved", id: budgetItemId, resolution: "continued" }]);
     this.log.info("Budget: continue once (one-time override)");
-    return this.dispatch({ text: "Continue the previous task from where you stopped.", files: [] });
+    return this.dispatch({ text: CONTINUE_TEXT, files: [] });
   }
 
   /** Raises the workspace budget one level and continues the task. */
@@ -737,7 +778,7 @@ export class SessionController {
     if (this.directory) await this.store.update(this.key("budget"), level);
     this.emit([{ type: "budget.resolved", id: budgetItemId, resolution: "increased" }]);
     this.log.info(`Budget increased to ${level}`);
-    return this.dispatch({ text: "Continue the previous task from where you stopped.", files: [] });
+    return this.dispatch({ text: CONTINUE_TEXT, files: [] });
   }
 
   async budgetNewSession(budgetItemId: string): Promise<void> {
@@ -764,6 +805,8 @@ export class SessionController {
         state: "stopped",
         text: this.strings().budgetStopped,
       });
+      this.taskStopReason = "budget";
+      this.notify("budget-stopped", `budget:${this.current?.id}:${this.budgetSeq}`);
       if (this.busy && !this.stopping) void this.stop();
     }
   }
@@ -793,12 +836,21 @@ export class SessionController {
       case "inbox.enqueued":
         if (this.transcript.has(`user:${ev.id}`)) return [];
         if (this.deliveredEarly.delete(ev.id)) {
-          return [{ type: "user.message", id: ev.id, text: ev.text, attachments: ev.attachments }];
+          this.trackUserMessage(
+            ev.id,
+            ev.raw ?? ev.text,
+            ev.delivery === "queue" || !this.task || !this.execActive,
+          );
+          return [
+            { type: "user.message", id: ev.id, text: ev.text, attachments: ev.attachments, raw: ev.raw },
+          ];
         }
         if (!this.pending.some((p) => p.id === ev.id)) {
+          // Queued items and prompts sent while idle start a task; steering joins the running one.
+          this.pendingStartsTask.set(ev.id, ev.delivery === "queue" || !this.execActive);
           this.pending = [
             ...this.pending,
-            { id: ev.id, text: ev.text, attachments: ev.attachments, delivery: ev.delivery },
+            { id: ev.id, text: ev.text, raw: ev.raw, attachments: ev.attachments, delivery: ev.delivery },
           ];
         }
         return [];
@@ -809,10 +861,22 @@ export class SessionController {
           this.deliveredEarly.add(ev.id);
           return [];
         }
-        return [{ type: "user.message", id: item.id, text: item.text, attachments: item.attachments }];
+        const starts = this.pendingStartsTask.get(item.id) ?? (item.delivery === "queue" || !this.task);
+        this.pendingStartsTask.delete(item.id);
+        this.trackUserMessage(item.id, item.raw ?? item.text, starts);
+        return [
+          {
+            type: "user.message",
+            id: item.id,
+            text: item.text,
+            attachments: item.attachments,
+            raw: item.raw,
+          },
+        ];
       }
       case "inbox.cancelled":
         this.pending = this.pending.filter((p) => p.id !== ev.id);
+        this.pendingStartsTask.delete(ev.id);
         return [];
       case "inbox.delivery":
         this.pending = this.pending.map((p) => (p.id === ev.id ? { ...p, delivery: ev.delivery } : p));
@@ -825,13 +889,23 @@ export class SessionController {
     switch (ev.type) {
       case "session.busy":
         this.busy = true;
+        this.execActive = true;
+        this.execSeq++;
         this.budget.startTask(this.sessionCost ?? 0);
         break;
       case "session.idle":
         this.busy = false;
         this.stopping = false;
+        this.execActive = false;
         this.budget.endTask();
         clearTimeout(this.stopTimer);
+        if (!replay) this.finishTask(ev.outcome);
+        break;
+      case "permission.requested":
+        if (!replay) this.notify("needs-input", `input:${ev.request.id}`);
+        break;
+      case "form.requested":
+        if (!replay) this.notify("needs-input", `input:${ev.form.id}`);
         break;
       case "session.renamed":
         if (this.current) this.current = { ...this.current, title: ev.title };
@@ -898,6 +972,84 @@ export class SessionController {
     }
     for (const e of out) this.transcript.apply(e);
     return out;
+  }
+
+  // ------------------------------------------------------------- current task
+
+  /**
+   * Records a delivered user message: a new task, a steer into the running
+   * task, or a Budget Guard continuation of the same task.
+   */
+  private trackUserMessage(id: string, raw: string, startsTask: boolean): void {
+    if (raw === CONTINUE_TEXT && this.task) {
+      this.task = { ...this.task, status: "running" };
+      this.taskStopReason = null;
+      return;
+    }
+    if (startsTask || !this.task) {
+      this.task = { id, raw, status: "running", steer: null };
+      this.taskStopReason = null;
+    } else {
+      this.task = { ...this.task, steer: raw };
+    }
+  }
+
+  private finishTask(outcome: "succeeded" | "failed" | "interrupted"): void {
+    if (!this.task) return;
+    const status: TaskStatus =
+      outcome === "succeeded"
+        ? "completed"
+        : outcome === "failed"
+          ? "failed"
+          : this.taskStopReason === "budget"
+            ? "budget-stopped"
+            : "stopped";
+    this.task = { ...this.task, status };
+    if (outcome === "succeeded") this.notify("completed", `completed:${this.task.id}:${this.execSeq}`);
+    else if (outcome === "failed") this.notify("failed", `failed:${this.task.id}:${this.execSeq}`);
+    // A user Stop or a budget stop is never reported as completed.
+  }
+
+  private notify(kind: TaskNotice["kind"], key: string): void {
+    if (this.notified.has(key) || !this.sink.onTaskNotice) return;
+    this.notified.add(key);
+    this.sink.onTaskNotice({
+      kind,
+      key,
+      summary: this.task ? summarizeTask(this.task.raw) : "",
+      sessionTitle: this.currentTitle(),
+    });
+  }
+
+  /** View model for the Current / Last Task bar; null for an empty session. */
+  taskView(): TaskView | null {
+    const t = this.task;
+    if (!t) return null;
+    const waiting =
+      this.busy &&
+      this.transcript.items.some(
+        (i) =>
+          (i.kind === "permission" && i.status === "pending") ||
+          (i.kind === "form" && i.status === "pending"),
+      );
+    const queued = this.pending.filter((p) => p.delivery === "queue");
+    return {
+      id: t.id,
+      label: this.busy ? "current" : "last",
+      summary: summarizeTask(t.raw) || "(empty prompt)",
+      status: waiting ? "waiting" : this.busy ? "running" : t.status,
+      steer: t.steer ? summarizeTask(t.steer) : null,
+      next: queued.length
+        ? { summary: summarizeTask(queued[0].raw ?? queued[0].text), more: queued.length - 1 }
+        : null,
+      chars: t.raw.length,
+      lines: t.raw.split("\n").length,
+    };
+  }
+
+  /** Exact original prompt of the current/last task (for Copy Prompt / expanded view). */
+  taskPrompt(): { id: string; text: string } | null {
+    return this.task ? { id: this.task.id, text: this.task.raw } : null;
   }
 
   private checkContext(): void {

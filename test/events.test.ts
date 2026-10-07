@@ -307,6 +307,7 @@ describe("history replay", () => {
       id: "msg_u",
       text: "Read .env",
       attachments: ["a.txt"],
+      raw: "Read .env",
     });
   });
 });

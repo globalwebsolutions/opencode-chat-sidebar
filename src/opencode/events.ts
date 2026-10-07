@@ -113,7 +113,13 @@ function userMessageEvent(id: string, text: string, files: unknown): UiEvent {
       if (name) names.push(name.split(/[\\/]/).pop() ?? name);
     }
   }
-  return { type: "user.message", id, text: split.text, attachments: [...names, ...split.snippets] };
+  return {
+    type: "user.message",
+    id,
+    text: split.text,
+    attachments: [...names, ...split.snippets],
+    raw: text,
+  };
 }
 
 /**
@@ -157,7 +163,14 @@ export class EventNormalizer {
         if (msg.type !== "user.message") return out([]);
         const delivery = item.delivery === "queue" ? "queue" : "steer";
         return out([
-          { type: "inbox.enqueued", id: msg.id, text: msg.text, attachments: msg.attachments, delivery },
+          {
+            type: "inbox.enqueued",
+            id: msg.id,
+            text: msg.text,
+            attachments: msg.attachments,
+            delivery,
+            raw: msg.raw,
+          },
         ]);
       }
       case "session.inbox.delivered":
