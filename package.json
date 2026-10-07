@@ -1,0 +1,167 @@
+{
+  "name": "opencode-sidebar",
+  "displayName": "OpenCode Sidebar (Unofficial)",
+  "description": "Unofficial VS Code sidebar chat interface for a local OpenCode installation.",
+  "version": "0.1.0",
+  "publisher": "local-dev",
+  "private": true,
+  "license": "UNLICENSED",
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Other"
+  ],
+  "keywords": [
+    "opencode",
+    "agent",
+    "chat"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "OpenCode can read files and run commands in the workspace, so the sidebar requires a trusted workspace."
+    },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "opencodeSidebar",
+          "title": "OpenCode",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "opencodeSidebar": [
+        {
+          "type": "webview",
+          "id": "opencodeSidebar.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "opencodeSidebar.focusChat",
+        "title": "Focus Chat",
+        "category": "OpenCode Sidebar"
+      },
+      {
+        "command": "opencodeSidebar.newSession",
+        "title": "New Session",
+        "category": "OpenCode Sidebar",
+        "icon": "$(add)"
+      },
+      {
+        "command": "opencodeSidebar.addCurrentFile",
+        "title": "Add Current File",
+        "category": "OpenCode Sidebar"
+      },
+      {
+        "command": "opencodeSidebar.addSelection",
+        "title": "Add Selection",
+        "category": "OpenCode Sidebar"
+      },
+      {
+        "command": "opencodeSidebar.stop",
+        "title": "Stop",
+        "category": "OpenCode Sidebar"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "opencodeSidebar.newSession",
+          "when": "view == opencodeSidebar.chat",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "opencodeSidebar.addSelection",
+          "when": "editorHasSelection",
+          "group": "opencodeSidebar@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "OpenCode Sidebar",
+      "properties": {
+        "opencodeSidebar.executablePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Absolute path to the `opencode` executable. Leave empty to search `PATH` and common install locations."
+        },
+        "opencodeSidebar.serverUrl": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "URL of a running OpenCode server, e.g. `http://127.0.0.1:4096`. Leave empty to use the OpenCode background service discovered on this machine. Non-loopback URLs are refused unless `#opencodeSidebar.allowRemoteServer#` is enabled."
+        },
+        "opencodeSidebar.allowRemoteServer": {
+          "type": "boolean",
+          "default": false,
+          "scope": "machine",
+          "markdownDescription": "Allow `#opencodeSidebar.serverUrl#` to point at a non-loopback host. Off by default."
+        },
+        "opencodeSidebar.defaultModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional default model as `providerID/modelID` (for example `opencode-go/kimi-k2.7-code`). Used when the workspace has no remembered selection."
+        },
+        "opencodeSidebar.defaultAgent": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional default agent/mode id (for example `build` or `plan`)."
+        },
+        "opencodeSidebar.autoStart": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Start the OpenCode background service automatically when the sidebar opens and no service is running."
+        },
+        "opencodeSidebar.showUsage": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show context-window and cost figures reported by OpenCode."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
+    "lint": "eslint src test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "pretest": "tsc -p tsconfig.test.json",
+    "test": "node --test --test-reporter=spec \"out-test/test/*.test.js\"",
+    "test:acceptance": "npm run build && tsc -p tsconfig.test.json && node out-test/test/acceptance/runAcceptance.js",
+    "package": "node -e \"require('fs').mkdirSync('dist-vsix',{recursive:true})\" && vsce package --skip-license --allow-missing-repository --out dist-vsix/",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.20.5",
+    "@types/vscode": "~1.95.0",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.12.0",
+    "prettier": "^3.9.9",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.71.1"
+  }
+}
