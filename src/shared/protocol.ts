@@ -4,9 +4,15 @@
 
 import type {
   AgentOption,
+  BudgetLevel,
+  BudgetLimits,
+  BudgetView,
   ConnectionStatus,
   FileChange,
+  FormAnswer,
+  InboxDelivery,
   ModelOption,
+  PendingInboxItem,
   PermissionDecision,
   SessionSummary,
   TranscriptItem,
@@ -34,20 +40,37 @@ export interface ViewState {
   busy: boolean;
   stopping: boolean;
   attachments: AttachmentChip[];
-  changes: FileChange[];
+  /** Changes attributed to the agent by OpenCode's session snapshots. */
+  agentChanges:
+    { status: "none" } | { status: "ok"; files: FileChange[] } | { status: "unavailable"; reason: string };
+  /** Uncommitted workspace changes (Git, HEAD ↔ working tree); null when Git is unavailable. */
+  workspaceChanges: { count: number } | null;
   /** null when usage display is disabled or no figures are available. */
   usage: UsageInfo | null;
+  /** Completed agent steps in the current session. */
+  steps: number;
+  selectedVariant: string | null;
+  budget: BudgetView;
+  budgetPresets: Record<Exclude<BudgetLevel, "off">, BudgetLimits>;
+  pending: PendingInboxItem[];
+  locale: "en" | "ar";
+  /** One-time tip about moving the view to the Secondary Side Bar. */
+  showPlacementHint: boolean;
 }
 
 export type HostMessage =
   | { type: "state"; state: ViewState }
   | { type: "transcript"; items: TranscriptItem[] }
   | { type: "events"; events: UiEvent[] }
-  | { type: "focusInput" };
+  | { type: "focusInput" }
+  | { type: "copyResult"; requestId: string; ok: boolean }
+  | { type: "restoreInput"; text: string }
+  | { type: "formError"; formId: string; error: string }
+  | { type: "focusModel" };
 
 export type WebviewMessage =
   | { type: "ready" }
-  | { type: "send"; text: string }
+  | { type: "send"; text: string; delivery?: InboxDelivery }
   | { type: "stop" }
   | { type: "newSession" }
   | { type: "selectSession"; id: string }
@@ -63,7 +86,21 @@ export type WebviewMessage =
   | { type: "openFile"; path: string }
   | { type: "openDiff"; path: string }
   | { type: "openAllDiffs" }
-  | { type: "copy"; text: string }
+  | { type: "copy"; text: string; requestId: string }
+  | { type: "copyMessage"; itemId: string; requestId: string }
+  | { type: "selectVariant"; variant: string }
+  | { type: "selectBudget"; level: BudgetLevel }
+  | { type: "budgetAction"; itemId: string; action: "continue" | "increase" | "newSession" }
+  | { type: "answerForm"; formId: string; answer: FormAnswer }
+  | { type: "cancelForm"; formId: string }
+  | { type: "editPending"; id: string }
+  | { type: "removePending"; id: string }
+  | { type: "openAgentDiff"; path: string }
+  | { type: "openAgentDiffAll" }
+  | { type: "openWorkspaceDiffAll" }
+  | { type: "retryLast" }
+  | { type: "focusModelPicker" }
+  | { type: "dismissHint" }
   | { type: "openLink"; href: string }
   | { type: "startOpenCode" }
   | { type: "retry" }
@@ -71,6 +108,24 @@ export type WebviewMessage =
   | { type: "showLogs" };
 
 const MAX_TEXT = 200_000;
+/** Code blocks copied from very long reports can be large; still bounded. */
+const MAX_COPY = 5_000_000;
+const BUDGET_LEVELS = ["off", "small", "medium", "large", "custom"];
+
+/** Validates a form answer: plain values only, bounded sizes. Field-level rules are checked by the host. */
+function isAnswer(v: unknown): boolean {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const entries = Object.entries(v as Record<string, unknown>);
+  if (entries.length > 100) return false;
+  return entries.every(([k, x]) => {
+    if (k.length === 0 || k.length > 200 || k === "__proto__" || k === "constructor" || k === "prototype")
+      return false;
+    if (typeof x === "string") return x.length <= 20_000;
+    if (typeof x === "number") return Number.isFinite(x);
+    if (typeof x === "boolean") return true;
+    return Array.isArray(x) && x.length <= 200 && x.every((y) => typeof y === "string" && y.length <= 2000);
+  });
+}
 const MAX_ID = 512;
 
 type Validator = (msg: Record<string, unknown>) => boolean;
@@ -80,7 +135,10 @@ const isStr = (v: unknown, max = MAX_ID): v is string =>
 
 const VALIDATORS: Record<WebviewMessage["type"], Validator> = {
   ready: () => true,
-  send: (m) => typeof m.text === "string" && m.text.length <= MAX_TEXT,
+  send: (m) =>
+    typeof m.text === "string" &&
+    m.text.length <= MAX_TEXT &&
+    (m.delivery === undefined || m.delivery === "steer" || m.delivery === "queue"),
   stop: () => true,
   newSession: () => true,
   selectSession: (m) => isStr(m.id),
@@ -97,7 +155,22 @@ const VALIDATORS: Record<WebviewMessage["type"], Validator> = {
   openFile: (m) => isStr(m.path, 4096),
   openDiff: (m) => isStr(m.path, 4096),
   openAllDiffs: () => true,
-  copy: (m) => typeof m.text === "string" && m.text.length <= MAX_TEXT,
+  copy: (m) => typeof m.text === "string" && m.text.length <= MAX_COPY && isStr(m.requestId, 64),
+  copyMessage: (m) => isStr(m.itemId) && isStr(m.requestId, 64),
+  selectVariant: (m) => typeof m.variant === "string" && m.variant.length <= 100,
+  selectBudget: (m) => typeof m.level === "string" && BUDGET_LEVELS.includes(m.level),
+  budgetAction: (m) =>
+    isStr(m.itemId) && (m.action === "continue" || m.action === "increase" || m.action === "newSession"),
+  answerForm: (m) => isStr(m.formId) && isAnswer(m.answer),
+  cancelForm: (m) => isStr(m.formId),
+  editPending: (m) => isStr(m.id),
+  removePending: (m) => isStr(m.id),
+  openAgentDiff: (m) => isStr(m.path, 4096),
+  openAgentDiffAll: () => true,
+  openWorkspaceDiffAll: () => true,
+  retryLast: () => true,
+  focusModelPicker: () => true,
+  dismissHint: () => true,
   openLink: (m) => isStr(m.href, 4096),
   startOpenCode: () => true,
   retry: () => true,
@@ -106,7 +179,7 @@ const VALIDATORS: Record<WebviewMessage["type"], Validator> = {
 };
 
 const ALLOWED_KEYS: Partial<Record<WebviewMessage["type"], string[]>> = {
-  send: ["text"],
+  send: ["text", "delivery"],
   selectSession: ["id"],
   selectModel: ["key"],
   selectAgent: ["id"],
@@ -115,7 +188,16 @@ const ALLOWED_KEYS: Partial<Record<WebviewMessage["type"], string[]>> = {
   respondPermission: ["requestId", "decision"],
   openFile: ["path"],
   openDiff: ["path"],
-  copy: ["text"],
+  copy: ["text", "requestId"],
+  copyMessage: ["itemId", "requestId"],
+  selectVariant: ["variant"],
+  selectBudget: ["level"],
+  budgetAction: ["itemId", "action"],
+  answerForm: ["formId", "answer"],
+  cancelForm: ["formId"],
+  editPending: ["id"],
+  removePending: ["id"],
+  openAgentDiff: ["path"],
   openLink: ["href"],
 };
 

@@ -23,6 +23,8 @@ interface TestApi {
 const MODEL = process.env.ACCEPT_MODEL ?? "opencode-go/kimi-k2.7-code";
 const results: Array<{ step: string; ok: boolean; detail: string }> = [];
 const events: UiEvent[] = [];
+/** Every OpenCode session this run created or used (for the read-only proof). */
+const touchedSessions = new Set<string>();
 
 function check(step: string, ok: boolean, detail = ""): void {
   results.push({ step, ok, detail });
@@ -116,7 +118,7 @@ async function realRepo(api: TestApi): Promise<void> {
 
   await api.handle({ type: "newSession" });
   let mark = items(api).length;
-  const r1 = await sendAndWait(api, "Run git status only. Do not modify anything.");
+  const r1 = await sendAndWait(api, "Run `git --no-optional-locks status` only. Do not modify anything.");
   const sid = api.controller()?.current?.id;
   check("New session created", !!sid, String(sid));
   const deltas = events.slice(r1.since).filter((e) => e.type === "assistant.delta").length;
@@ -126,7 +128,7 @@ async function realRepo(api: TestApi): Promise<void> {
     `${deltas} deltas; answer: ${lastAssistantText(api).slice(0, 160).replace(/\n/g, " ")}`,
   );
   const shells = toolsSince(api, mark).filter((t) => t.category === "shell");
-  const gitStatus = shells.find((t) => /git\s+status/.test(t.detail.command ?? ""));
+  const gitStatus = shells.find((t) => /git\b.*\bstatus/.test(t.detail.command ?? ""));
   check(
     "Shell activity rendered",
     !!gitStatus,
@@ -241,6 +243,7 @@ async function realRepo(api: TestApi): Promise<void> {
   );
   const usage = api.viewState().usage;
   check("Usage display", !!usage?.contextTokens, JSON.stringify(usage));
+  await v02RealRepo(api);
 }
 
 // ----------------------------------------------------------- fixture (edits/diff/stop)
@@ -270,11 +273,15 @@ async function fixture(api: TestApi): Promise<void> {
     summary?.kind === "turn-summary" && summary.files.some((f) => f.path === "a.txt" && f.additions >= 1),
     JSON.stringify(summary?.kind === "turn-summary" ? summary.files : null),
   );
-  await waitFor("changes panel", () => api.viewState().changes.length > 0, 10_000);
+  const agentFiles = () => {
+    const ac = api.viewState().agentChanges;
+    return ac.status === "ok" ? ac.files : [];
+  };
+  await waitFor("changes panel", () => agentFiles().length > 0, 10_000);
   check(
     "Changed-files panel",
-    api.viewState().changes.some((c) => c.path === "a.txt"),
-    JSON.stringify(api.viewState().changes),
+    agentFiles().some((c) => c.path === "a.txt"),
+    JSON.stringify(api.viewState().agentChanges),
   );
   await api.handle({ type: "openDiff", path: "a.txt" });
   await new Promise((r) => setTimeout(r, 800));
@@ -289,7 +296,7 @@ async function fixture(api: TestApi): Promise<void> {
   const tab2 = vscode.window.tabGroups.activeTabGroup.activeTab;
   check(
     "Multi-file native diff (View Diff)",
-    !!tab2 && tab2.label.includes("OpenCode session changes"),
+    !!tab2 && tab2.label.includes("OpenCode agent changes"),
     `${tab2?.label}`,
   );
 
@@ -360,6 +367,409 @@ async function fixture(api: TestApi): Promise<void> {
     `before=${running} after=${psHas("sleep 120")}`,
   );
   check("UI no longer busy after stop", api.viewState().busy === false && api.viewState().stopping === false);
+  await v02Fixture(api);
+}
+
+// ================================================================== v0.2
+
+async function waitIdle(_api: TestApi, since: number, timeoutMs = 240_000) {
+  return waitFor(
+    "session idle",
+    () =>
+      events
+        .slice(since)
+        .find((e): e is Extract<UiEvent, { type: "session.idle" }> => e.type === "session.idle"),
+    timeoutMs,
+  );
+}
+
+/** Copies an assistant message through the real handler and returns the clipboard text (clipboard restored after). */
+async function copyViaUi(api: TestApi, itemId: string): Promise<string> {
+  const saved = await vscode.env.clipboard.readText();
+  try {
+    await api.handle({ type: "copyMessage", itemId, requestId: "accept" });
+    return await vscode.env.clipboard.readText();
+  } finally {
+    await vscode.env.clipboard.writeText(saved);
+  }
+}
+
+function lastAssistant(api: TestApi): Extract<TranscriptItem, { kind: "assistant" }> | undefined {
+  return [...items(api)]
+    .reverse()
+    .find((i): i is Extract<TranscriptItem, { kind: "assistant" }> => i.kind === "assistant");
+}
+
+async function checkFullReportCopy(api: TestApi, prompt: string): Promise<void> {
+  const since = events.length;
+  await api.handle({ type: "send", text: prompt });
+  await waitIdle(api, since);
+  const item = lastAssistant(api);
+  const sid = api.controller()?.current?.id;
+  check(
+    "Report has Markdown structure",
+    !!item && /^#/m.test(item.text) && /^\s*[-*] /m.test(item.text) && /\|/.test(item.text),
+    (item?.text ?? "").slice(0, 120).replace(/\n/g, "⏎"),
+  );
+  const copied = item ? await copyViaUi(api, item.id) : "";
+  check(
+    "Full-message Copy equals canonical text",
+    !!item && copied === item.text,
+    `${copied.length} chars copied`,
+  );
+  // Reload the session from OpenCode's own storage and compare again.
+  await api.handle({ type: "newSession" });
+  await api.handle({ type: "selectSession", id: sid! });
+  const stored = lastAssistant(api);
+  check(
+    "Copied Markdown matches OpenCode's stored message exactly",
+    !!stored && stored.text === copied,
+    `${stored?.text.length} vs ${copied.length}`,
+  );
+}
+
+async function checkQuestion(api: TestApi, prompt: string, pick: (opts: string[]) => string): Promise<void> {
+  const since = events.length;
+  await api.handle({ type: "send", text: prompt });
+  const req = await waitFor(
+    "OpenCode question",
+    () =>
+      events
+        .slice(since)
+        .find((e): e is Extract<UiEvent, { type: "form.requested" }> => e.type === "form.requested"),
+    180_000,
+  );
+  const field = req.form.fields[0];
+  check(
+    "Question card rendered",
+    items(api).some((i) => i.id === `form:${req.form.id}` && i.kind === "form" && i.status === "pending"),
+    `${req.form.title}: ${field.type === "external" ? "" : (field.title ?? field.key)}`,
+  );
+  const sid = api.controller()?.current?.id;
+  await api.handle({ type: "newSession" });
+  await api.handle({ type: "selectSession", id: sid! });
+  const restored = items(api).find((i) => i.id === `form:${req.form.id}`);
+  check(
+    "Pending question survives session reopen",
+    restored?.kind === "form" && restored.status === "pending",
+  );
+  const options =
+    field.type === "string" || field.type === "multiselect" ? (field.options ?? []).map((o) => o.value) : [];
+  const value = pick(options);
+  await api.handle({
+    type: "answerForm",
+    formId: req.form.id,
+    answer: { [field.key]: field.type === "multiselect" ? [value] : value },
+  });
+  const answered = items(api).find((i) => i.id === `form:${req.form.id}`);
+  check(
+    "Question answered from the sidebar",
+    answered?.kind === "form" && answered.status === "answered",
+    value,
+  );
+  const after = events.length;
+  await waitIdle(api, Math.min(since, after));
+  check(
+    "Agent continued after the answer",
+    lastAssistantText(api).length > 0,
+    lastAssistantText(api).slice(0, 100).replace(/\n/g, " "),
+  );
+}
+
+async function v02RealRepo(api: TestApi): Promise<void> {
+  const st = api.viewState();
+  const providers = new Set((st.models ?? []).map((m) => m.providerName));
+  check("v0.2 Model selector grouped by provider", providers.size >= 1, [...providers].join(" | "));
+  check(
+    "v0.2 Budget UI present",
+    !!st.budget && !!st.budgetPresets.small,
+    `level=${st.budget.level} small=${JSON.stringify(st.budgetPresets.small)}`,
+  );
+  await api.handle({ type: "selectAgent", id: "plan" });
+  await api.handle({ type: "newSession" });
+  await checkFullReportCopy(
+    api,
+    "Run `git --no-optional-locks status` only, then summarize it as a short Markdown report with a level-1 heading, a bullet list and a two-column table. Do not modify anything.",
+  );
+  await api.handle({ type: "newSession" });
+  await checkQuestion(
+    api,
+    "Use your question tool to ask me whether I want a short or a detailed answer (two options). After I answer, run `git --no-optional-locks status` only and answer accordingly. Do not modify anything.",
+    (opts) => opts.find((o) => /short/i.test(o)) ?? opts[0] ?? "Short",
+  );
+  // Cancellation still works (read-only command).
+  await api.handle({ type: "newSession" });
+  const since = events.length;
+  const mark = items(api).length;
+  await api.handle({
+    type: "send",
+    text: "Run the shell command `sleep 30` and wait for it to finish. Do not do anything else.",
+  });
+  await waitFor(
+    "sleep running",
+    () =>
+      toolsSince(api, mark).find((t) => /sleep 30/.test(t.detail.command ?? "") && t.status === "running"),
+    180_000,
+  );
+  await new Promise((r) => setTimeout(r, 1500));
+  await api.handle({ type: "stop" });
+  const idle = await waitIdle(api, since, 30_000);
+  await new Promise((r) => setTimeout(r, 500));
+  check("v0.2 Stop still cancels", idle.outcome === "interrupted" && !psHas("sleep 30"), idle.outcome);
+
+  // Session titles: broken generated titles are never shown.
+  await api.handle({ type: "refreshSessions" });
+  await new Promise((r) => setTimeout(r, 1500));
+  const titles = api.viewState().sessions.map((x) => x.title);
+  check(
+    "No broken generated titles in the session list",
+    !titles.some((x) => /title only|massive request/i.test(x)),
+    titles.slice(0, 6).join(" | "),
+  );
+
+  // Read-only proof that holds even while other agents work in this repository:
+  // OpenCode's own snapshot diff of every session this run used must be empty.
+  const changed: string[] = [];
+  for (const id of touchedSessions) {
+    await api.handle({ type: "selectSession", id });
+    await api.controller()?.refreshChanges();
+    const ac = api.viewState().agentChanges;
+    if (ac.status !== "none")
+      changed.push(
+        `${id}:${ac.status}${ac.status === "ok" ? ":" + ac.files.map((f) => f.path).join(",") : ""}`,
+      );
+  }
+  check(
+    "This run changed no files (OpenCode snapshot diff of all its sessions)",
+    changed.length === 0 && touchedSessions.size > 0,
+    `${touchedSessions.size} sessions checked ${changed.join(" ")}`,
+  );
+}
+
+async function v02Fixture(api: TestApi): Promise<void> {
+  const root = api.workspace().active!.path;
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe" }).toString();
+
+  // --- full-report copy
+  await api.handle({ type: "newSession" });
+  await checkFullReportCopy(
+    api,
+    "Write a short Markdown report about this folder with a level-1 heading, a bullet list, a two-column table and a fenced code block. Do not run any tools.",
+  );
+
+  // --- agent-only diff on a repository that is already dirty
+  git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qam", "baseline");
+  fs.appendFileSync(path.join(root, "a.txt"), "user line\n");
+  fs.writeFileSync(path.join(root, "b.txt"), "user change in another file\n");
+  await api.handle({ type: "selectAgent", id: "build" });
+  await api.handle({ type: "newSession" });
+  let since = events.length;
+  await api.handle({
+    type: "send",
+    text: "Append a new last line containing exactly AGENT LINE to the file a.txt using your edit tool. Do not touch any other file.",
+  });
+  await waitIdle(api, since);
+  await waitFor("agent changes", () => api.viewState().agentChanges.status !== "none", 15_000);
+  const ac = api.viewState().agentChanges;
+  const files = ac.status === "ok" ? ac.files.map((f) => f.path) : [];
+  check(
+    "Agent changes list only the agent's file (dirty repo, other file)",
+    ac.status === "ok" && files.length === 1 && files[0] === "a.txt",
+    JSON.stringify(ac),
+  );
+  check(
+    "Workspace changes counted separately",
+    (api.viewState().workspaceChanges?.count ?? 0) >= 2,
+    JSON.stringify(api.viewState().workspaceChanges),
+  );
+  await api.handle({ type: "openAgentDiff", path: "a.txt" });
+  await new Promise((r) => setTimeout(r, 1000));
+  const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+  const input = tab?.input;
+  const isAgentDiff =
+    input instanceof vscode.TabInputTextDiff && input.original.scheme === "opencode-sidebar-agent";
+  check("Agent-only diff opens in the native diff editor", isAgentDiff, `${tab?.label}`);
+  if (input instanceof vscode.TabInputTextDiff) {
+    const before = (await vscode.workspace.openTextDocument(input.original)).getText();
+    const afterText = (await vscode.workspace.openTextDocument(input.modified)).getText();
+    check(
+      "Same-file pre-existing user change is baseline, not attributed to the agent",
+      before.includes("user line") &&
+        !before.includes("AGENT LINE") &&
+        afterText.includes("user line") &&
+        afterText.includes("AGENT LINE"),
+      JSON.stringify({ before, after: afterText }),
+    );
+  }
+  const sid = api.controller()?.current?.id;
+  await api.handle({ type: "newSession" });
+  await api.handle({ type: "selectSession", id: sid! });
+  await waitFor("changes after reopen", () => api.viewState().agentChanges.status === "ok", 15_000);
+  const ac2 = api.viewState().agentChanges;
+  check(
+    "Agent changes survive session restart",
+    ac2.status === "ok" && ac2.files.length === 1 && ac2.files[0].path === "a.txt",
+    JSON.stringify(ac2),
+  );
+
+  // --- steering and queue (OpenCode inbox delivery)
+  await api.handle({ type: "newSession" });
+  since = events.length;
+  const mark = items(api).length;
+  await api.handle({
+    type: "send",
+    text: "Run the shell command `sleep 12 && echo first` and wait for it, then reply DONE.",
+  });
+  await waitFor(
+    "sleep running",
+    () =>
+      toolsSince(api, mark).find((t) => /sleep 12/.test(t.detail.command ?? "") && t.status === "running"),
+    180_000,
+  );
+  await api.handle({
+    type: "send",
+    text: "Steering: after that command, also run `echo steered`.",
+    delivery: "steer",
+  });
+  await api.handle({
+    type: "send",
+    text: "Queued: then reply with the single word QUEUED.",
+    delivery: "queue",
+  });
+  await api.handle({ type: "send", text: "Queued2: reply SECOND.", delivery: "queue" });
+  await waitFor("3 pending", () => api.viewState().pending.length === 3 || undefined, 10_000).catch(
+    () => undefined,
+  );
+  const pend = api.viewState().pending;
+  check(
+    "Steer/queue messages shown as pending with their delivery",
+    pend.some((p) => p.delivery === "steer") && pend.filter((p) => p.delivery === "queue").length === 2,
+    JSON.stringify(pend.map((p) => [p.delivery, p.text.slice(0, 12)])),
+  );
+  const second = pend.find((p) => p.text.startsWith("Queued2"));
+  if (second) await api.handle({ type: "removePending", id: second.id });
+  check(
+    "Removed queued message is cancelled in OpenCode",
+    !api.viewState().pending.some((p) => p.text.startsWith("Queued2")),
+  );
+  await waitFor(
+    "queue drained and idle",
+    () =>
+      api.viewState().pending.length === 0 &&
+      !api.viewState().busy &&
+      events.slice(since).some((e) => e.type === "session.idle")
+        ? true
+        : undefined,
+    240_000,
+  );
+  const users = items(api)
+    .filter((i): i is Extract<TranscriptItem, { kind: "user" }> => i.kind === "user")
+    .map((u) => u.text);
+  const outputs = toolsSince(api, mark)
+    .map((t) => t.detail.output ?? "")
+    .join("\n");
+  check(
+    "Steering delivered into the running task",
+    users.some((u) => u.startsWith("Steering:")) && outputs.includes("steered"),
+    outputs.slice(0, 80).replace(/\n/g, " "),
+  );
+  check(
+    "Queued message delivered after the task",
+    users.some((u) => u.startsWith("Queued:")) &&
+      /QUEUED/.test(
+        items(api)
+          .filter((i) => i.kind === "assistant")
+          .map((i) => (i.kind === "assistant" ? i.text : ""))
+          .join(" "),
+      ),
+  );
+  check("Removed message never delivered", !users.some((u) => u.startsWith("Queued2")));
+
+  // --- question form
+  await api.handle({ type: "newSession" });
+  await checkQuestion(
+    api,
+    "Use your question tool to ask me which color I prefer, with options red and blue. Then reply with my answer.",
+    (opts) => opts.find((o) => /blue/i.test(o)) ?? "Blue",
+  );
+  check(
+    "Answer reached the agent",
+    /blue/i.test(lastAssistantText(api)),
+    lastAssistantText(api).slice(0, 60),
+  );
+
+  // --- budget guard interrupts the real run
+  await vscode.workspace
+    .getConfiguration("opencodeSidebar")
+    .update("budget.small", { maxCost: 0, maxSteps: 5 }, vscode.ConfigurationTarget.Global);
+  await api.handle({ type: "selectBudget", level: "small" });
+  await api.handle({ type: "newSession" });
+  since = events.length;
+  await api.handle({
+    type: "send",
+    text: "Run these shell commands one at a time, each as its own separate tool call and waiting for each before the next: `echo 1`, `echo 2`, `echo 3`, `echo 4`, `echo 5`, `echo 6`, `echo 7`, `echo 8`, `echo 9`, `echo 10`. Then reply DONE.",
+  });
+  const stopCard = await waitFor(
+    "budget stop",
+    () =>
+      events
+        .slice(since)
+        .find((e): e is Extract<UiEvent, { type: "budget" }> => e.type === "budget" && e.state === "stopped"),
+    240_000,
+  );
+  const warned = events.slice(since).some((e) => e.type === "budget" && e.state === "warning");
+  const idle = await waitIdle(api, since, 60_000);
+  check("Budget warning shown before the limit", warned);
+  check(
+    "Budget hard limit interrupts the real OpenCode run",
+    idle.outcome === "interrupted",
+    `${idle.outcome}; task steps=${api.viewState().budget.taskSteps}`,
+  );
+  since = events.length;
+  await api.handle({ type: "budgetAction", itemId: stopCard.id, action: "continue" });
+  await waitFor(
+    "continuation started",
+    () => events.slice(since).some((e) => e.type === "session.busy") || undefined,
+    60_000,
+  );
+  const carried = api.viewState().budget;
+  check(
+    "Continue once resumes the same task with one override",
+    carried.allowance === 2 && carried.taskSteps >= 5 && api.viewState().budget.level === "small",
+    JSON.stringify(carried),
+  );
+  await waitIdle(api, since, 240_000);
+  await api.handle({ type: "selectBudget", level: "off" });
+
+  // --- model variant
+  const withVariant = (api.viewState().models ?? []).find(
+    (m) => m.providerID === MODEL.split("/")[0] && m.variants.includes("none"),
+  );
+  if (withVariant) {
+    await api.handle({ type: "selectModel", key: withVariant.key });
+    await api.handle({ type: "selectVariant", variant: "none" });
+    await api.handle({ type: "newSession" });
+    since = events.length;
+    await api.handle({ type: "send", text: "Reply with the single word OK." });
+    await waitIdle(api, since, 180_000);
+    const cur = api.controller()?.current;
+    const errorCard = items(api).find((i) => i.kind === "error");
+    check(
+      "Model variant sent to OpenCode",
+      cur?.variant === "none",
+      `${withVariant.key} variant=${cur?.variant}; run: ${errorCard?.kind === "error" ? `error → ${errorCard.title}` : lastAssistantText(api).slice(0, 30)}`,
+    );
+    await api.handle({ type: "selectModel", key: MODEL });
+    check(
+      "Variant cleared for a model without that variant",
+      api.viewState().selectedVariant === null ||
+        (api.viewState().models ?? [])
+          .find((m) => m.key === MODEL)
+          ?.variants.includes(api.viewState().selectedVariant ?? "") === true,
+    );
+  } else {
+    check("Model variant sent to OpenCode", true, "skipped: no model with variant 'none' for this provider");
+  }
 }
 
 function psHas(needle: string): boolean {
@@ -389,7 +799,11 @@ export async function run(): Promise<void> {
   if (!ext) throw new Error("extension not found");
   const exports = (await ext.activate()) as { testApi: TestApi };
   const api = exports.testApi;
-  const tap = api.tap((evs) => events.push(...evs));
+  const tap = api.tap((evs) => {
+    events.push(...evs);
+    const id = api.controller()?.current?.id;
+    if (id) touchedSessions.add(id);
+  });
   const scenario = process.env.ACCEPT_SCENARIO;
   try {
     if (scenario === "real-repo") await realRepo(api);

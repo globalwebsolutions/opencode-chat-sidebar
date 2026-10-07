@@ -2,7 +2,7 @@
   "name": "opencode-sidebar",
   "displayName": "OpenCode Sidebar (Unofficial)",
   "description": "Unofficial VS Code sidebar chat interface for a local OpenCode installation.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "local-dev",
   "private": true,
   "license": "UNLICENSED",
@@ -135,6 +135,116 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Show context-window and cost figures reported by OpenCode."
+        },
+        "opencodeSidebar.budget.default": {
+          "type": "string",
+          "enum": [
+            "off",
+            "small",
+            "medium",
+            "large",
+            "custom"
+          ],
+          "default": "medium",
+          "markdownDescription": "Task budget used when a workspace has no remembered choice. The budget is a local safety limit per task (one agent run); it only uses cost and step figures reported by OpenCode."
+        },
+        "opencodeSidebar.budget.small": {
+          "type": "object",
+          "default": {
+            "maxCost": 0.1,
+            "maxSteps": 20
+          },
+          "properties": {
+            "maxCost": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Maximum task cost in USD (0 disables this metric)."
+            },
+            "maxSteps": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum agent steps per task (0 disables this metric)."
+            }
+          },
+          "additionalProperties": false,
+          "markdownDescription": "Limits for the **Small** task budget."
+        },
+        "opencodeSidebar.budget.medium": {
+          "type": "object",
+          "default": {
+            "maxCost": 0.3,
+            "maxSteps": 50
+          },
+          "properties": {
+            "maxCost": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Maximum task cost in USD (0 disables this metric)."
+            },
+            "maxSteps": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum agent steps per task (0 disables this metric)."
+            }
+          },
+          "additionalProperties": false,
+          "markdownDescription": "Limits for the **Medium** task budget."
+        },
+        "opencodeSidebar.budget.large": {
+          "type": "object",
+          "default": {
+            "maxCost": 1,
+            "maxSteps": 120
+          },
+          "properties": {
+            "maxCost": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Maximum task cost in USD (0 disables this metric)."
+            },
+            "maxSteps": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum agent steps per task (0 disables this metric)."
+            }
+          },
+          "additionalProperties": false,
+          "markdownDescription": "Limits for the **Large** task budget."
+        },
+        "opencodeSidebar.budget.custom": {
+          "type": "object",
+          "default": {
+            "maxCost": 0.5,
+            "maxSteps": 80
+          },
+          "properties": {
+            "maxCost": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Maximum task cost in USD (0 disables this metric)."
+            },
+            "maxSteps": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Maximum agent steps per task (0 disables this metric)."
+            }
+          },
+          "additionalProperties": false,
+          "markdownDescription": "Limits for the **Custom** task budget."
+        },
+        "opencodeSidebar.budget.warnPercent": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 99,
+          "default": 80,
+          "markdownDescription": "Warn when a task reaches this percentage of its budget."
+        },
+        "opencodeSidebar.budget.contextWarnPercent": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "default": 80,
+          "markdownDescription": "Warn when the context window is this full (warning only, never stops the agent). `0` disables the warning."
         }
       }
     }
@@ -150,7 +260,8 @@
     "test": "node --test --test-reporter=spec \"out-test/test/*.test.js\"",
     "test:acceptance": "npm run build && tsc -p tsconfig.test.json && node out-test/test/acceptance/runAcceptance.js",
     "package": "node -e \"require('fs').mkdirSync('dist-vsix',{recursive:true})\" && vsce package --skip-license --allow-missing-repository --out dist-vsix/",
-    "vscode:prepublish": "npm run build"
+    "vscode:prepublish": "npm run build",
+    "test:webview": "npm run build && tsc -p tsconfig.test.json && node --test --test-reporter=spec \"out-test/test/webview/*.test.js\""
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -161,6 +272,7 @@
     "esbuild": "^0.28.2",
     "eslint": "^10.12.0",
     "prettier": "^3.9.9",
+    "puppeteer-core": "^25.12.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.71.1"
   }

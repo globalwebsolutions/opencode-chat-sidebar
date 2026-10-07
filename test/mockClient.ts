@@ -8,7 +8,11 @@ import type {
 import { OpenCodeHttpError } from "../src/opencode/client";
 import type {
   AgentOption,
+  FormAnswer,
+  FormRequest,
+  InboxDelivery,
   ModelOption,
+  PendingInboxItem,
   PermissionDecision,
   PermissionRequest,
   SessionSummary,
@@ -31,6 +35,7 @@ export class MockClient implements OpenCodeClient {
       name: "Kimi",
       providerName: "OpenCode Go",
       contextLimit: 262144,
+      variants: [],
     },
     {
       key: "vast/qwen",
@@ -39,6 +44,7 @@ export class MockClient implements OpenCodeClient {
       name: "Qwen",
       providerName: "Vast",
       contextLimit: 131072,
+      variants: ["low", "high"],
     },
   ];
   modelResponses: ModelOption[][] | null = null;
@@ -89,7 +95,7 @@ export class MockClient implements OpenCodeClient {
   async createSession(input: {
     directory: string;
     agent?: string;
-    model?: { providerID: string; id: string };
+    model?: { providerID: string; id: string; variant?: string };
   }) {
     this.record("createSession", input);
     const s: SessionSummary = {
@@ -100,6 +106,7 @@ export class MockClient implements OpenCodeClient {
       agent: input.agent ?? null,
       modelKey: input.model ? `${input.model.providerID}/${input.model.id}` : null,
       outcome: null,
+      variant: input.model?.variant ?? null,
       cost: 0,
     };
     this.sessions.unshift(s);
@@ -109,11 +116,14 @@ export class MockClient implements OpenCodeClient {
     this.record("listMessages", id);
     return this.messages;
   }
-  async prompt(id: string, input: { text: string; files: Array<{ uri: string; name: string }> }) {
+  async prompt(
+    id: string,
+    input: { text: string; files: Array<{ uri: string; name: string }>; delivery?: InboxDelivery },
+  ) {
     this.record("prompt", id, input);
     return { id: `msg_${++this.counter}` };
   }
-  async switchModel(id: string, model: { providerID: string; id: string }) {
+  async switchModel(id: string, model: { providerID: string; id: string; variant?: string }) {
     this.record("switchModel", id, model);
   }
   async switchAgent(id: string, agent: string) {
@@ -133,10 +143,42 @@ export class MockClient implements OpenCodeClient {
     this.record("replyPermission", id, requestId, decision);
     if (this.replyError) throw this.replyError;
   }
-  async sessionDiff(id: string) {
-    this.record("sessionDiff", id);
+  async sessionDiff(id: string, range?: { from?: string; to?: string; full?: boolean }) {
+    this.record("sessionDiff", id, range);
+    if (this.diffError) throw this.diffError;
     return this.diff;
   }
+  forms: FormRequest[] = [];
+  inbox: PendingInboxItem[] = [];
+  formReplyError: Error | null = null;
+  inboxCancelError: Error | null = null;
+  diffError: Error | null = null;
+  firstTexts = new Map<string, string>();
+
+  async listForms(id: string) {
+    this.record("listForms", id);
+    return this.forms;
+  }
+  async replyForm(id: string, formId: string, answer: FormAnswer) {
+    this.record("replyForm", id, formId, answer);
+    if (this.formReplyError) throw this.formReplyError;
+  }
+  async cancelForm(id: string, formId: string) {
+    this.record("cancelForm", id, formId);
+  }
+  async listInbox(id: string) {
+    this.record("listInbox", id);
+    return this.inbox;
+  }
+  async cancelInbox(id: string, inboxId: string) {
+    this.record("cancelInbox", id, inboxId);
+    if (this.inboxCancelError) throw this.inboxCancelError;
+  }
+  async firstUserText(id: string) {
+    this.record("firstUserText", id);
+    return this.firstTexts.get(id) ?? null;
+  }
+
   subscribe(_handlers: EventHandlers): EventSubscription {
     return { dispose() {} };
   }

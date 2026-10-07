@@ -157,8 +157,8 @@ body {
   flex: 1;
   min-width: 0;
 }
-.selector:last-child {
-  flex: 0 1 38%;
+.selector.grow {
+  flex: 1 1 60%;
 }
 .selector-label {
   font-size: 0.78em;
@@ -750,4 +750,190 @@ th {
 .tool-row > summary > .small {
   white-space: nowrap;
   flex: none;
+}
+
+/* ------------------------------------------------------------- v0.2 */
+
+.model-caption {
+  margin-top: -2px;
+}
+.task-meter {
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.task-meter.budget-warning {
+  color: var(--vscode-editorWarning-foreground, var(--warn-border));
+}
+.task-meter.budget-exceeded {
+  color: var(--err);
+}
+.hint-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gap);
+  justify-content: space-between;
+}
+
+.msg-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  opacity: 0.85;
+}
+.msg-footer:hover,
+.msg-footer:focus-within {
+  opacity: 1;
+}
+.copy-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.copy-btn.copied {
+  color: var(--vscode-testing-iconPassed, var(--add));
+}
+.copy-error {
+  color: var(--err);
+}
+
+.error-card,
+.budget-card,
+.form-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px;
+}
+.error-card {
+  border-color: var(--vscode-inputValidation-errorBorder, var(--err));
+}
+.error-title {
+  font-weight: 600;
+  color: var(--err);
+  margin-bottom: 2px;
+}
+.budget-card.budget-warning {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+.budget-card.budget-stopped {
+  border-color: var(--vscode-inputValidation-errorBorder, var(--err));
+}
+.form-card.pending {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-editorWidget-background);
+}
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 6px 0;
+}
+.form-label {
+  font-weight: 600;
+}
+.required {
+  color: var(--err);
+}
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.choice,
+.check,
+.mode-option {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  cursor: pointer;
+}
+.text-input {
+  width: 100%;
+  padding: 3px 6px;
+  border-radius: var(--radius);
+  border: 1px solid var(--vscode-input-border, var(--border));
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font: inherit;
+}
+
+.pending {
+  border-top: 1px solid var(--border);
+  padding: 4px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 25vh;
+  overflow-y: auto;
+}
+.pending-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.92em;
+}
+.pending-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mode-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 0.9em;
+}
+
+/* --------------------------------------------------- high contrast */
+
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --border: var(--vscode-contrastBorder, CanvasText);
+}
+body.vscode-high-contrast .btn,
+body.vscode-high-contrast-light .btn,
+body.vscode-high-contrast .select,
+body.vscode-high-contrast-light .select,
+body.vscode-high-contrast .input,
+body.vscode-high-contrast-light .input,
+body.vscode-high-contrast .text-input,
+body.vscode-high-contrast-light .text-input {
+  border: 1px solid var(--vscode-contrastBorder, CanvasText);
+}
+body.vscode-high-contrast :focus-visible,
+body.vscode-high-contrast-light :focus-visible {
+  outline: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder, Highlight));
+  outline-offset: 1px;
+}
+body.vscode-high-contrast .permission.pending,
+body.vscode-high-contrast-light .permission.pending,
+body.vscode-high-contrast .form-card.pending,
+body.vscode-high-contrast-light .form-card.pending,
+body.vscode-high-contrast .budget-card,
+body.vscode-high-contrast-light .budget-card,
+body.vscode-high-contrast .error-card,
+body.vscode-high-contrast-light .error-card {
+  border-width: 2px;
+}
+body.vscode-high-contrast .badge,
+body.vscode-high-contrast-light .badge,
+body.vscode-high-contrast .chip,
+body.vscode-high-contrast-light .chip {
+  border: 1px solid var(--vscode-contrastBorder, CanvasText);
+}
+@media (forced-colors: active) {
+  .btn,
+  .select,
+  .input,
+  .text-input,
+  .chip,
+  .badge {
+    border: 1px solid ButtonText;
+  }
 }

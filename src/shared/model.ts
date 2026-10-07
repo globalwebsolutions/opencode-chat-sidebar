@@ -27,6 +27,8 @@ export interface WorkspaceInfo {
   repoRoot: string | null;
   /** For a secondary worktree, the path of the main working tree when known. */
   mainWorktree: string | null;
+  /** Uncommitted files reported by the Git extension; null when unavailable. */
+  uncommitted: number | null;
 }
 
 export interface ModelOption {
@@ -37,6 +39,8 @@ export interface ModelOption {
   name: string;
   providerName: string;
   contextLimit: number | null;
+  /** Variant ids OpenCode exposes for this model (e.g. reasoning effort); empty when none. */
+  variants: string[];
 }
 
 export interface AgentOption {
@@ -51,6 +55,8 @@ export interface SessionSummary {
   updated: number;
   agent: string | null;
   modelKey: string | null;
+  /** Model variant recorded on the session, when any. */
+  variant: string | null;
   outcome: "succeeded" | "failed" | "interrupted" | null;
   /** Session cost in USD as reported by OpenCode, when present. */
   cost: number | null;
@@ -90,6 +96,14 @@ export interface UsageInfo {
   contextLimit: number | null;
   /** Session cost in USD as reported by OpenCode. */
   cost: number | null;
+}
+
+/** Error details as reported by OpenCode (already free of credentials). */
+export interface RawError {
+  type: string;
+  message: string;
+  status: number | null;
+  body: string | null;
 }
 
 export type PermissionDecision = "once" | "always" | "reject";
@@ -140,7 +154,112 @@ export type TranscriptItem =
       status: "pending" | "sending" | PermissionDecision | "expired";
     }
   | { kind: "turn-summary"; id: string; files: FileChange[] }
-  | { kind: "notice"; id: string; level: "error" | "info"; text: string };
+  | { kind: "notice"; id: string; level: "error" | "info"; text: string }
+  | { kind: "form"; id: string; form: FormRequest; status: FormStatus; answer: FormAnswer | null }
+  | { kind: "error"; id: string; title: string; detail: string; actions: ErrorAction[] }
+  | {
+      kind: "budget";
+      id: string;
+      state: "warning" | "stopped";
+      text: string;
+      /** Set once the user picked an action on a stopped card. */
+      resolved: "continued" | "increased" | "new-session" | null;
+    };
+
+export type InboxDelivery = "steer" | "queue";
+
+export interface PendingInboxItem {
+  id: string;
+  text: string;
+  attachments: string[];
+  delivery: InboxDelivery;
+}
+
+// ------------------------------------------------------------------- forms
+
+export interface FormOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+export interface FormCondition {
+  key: string;
+  op: "eq" | "neq";
+  value: string | number | boolean;
+}
+
+interface FormFieldBase {
+  key: string;
+  title?: string;
+  description?: string;
+  required?: boolean;
+  hidden?: boolean;
+  when?: FormCondition[];
+}
+
+export type FormField =
+  | (FormFieldBase & {
+      type: "string";
+      format?: "email" | "uri" | "date" | "date-time";
+      minLength?: number;
+      maxLength?: number;
+      pattern?: string;
+      placeholder?: string;
+      default?: string;
+      options?: FormOption[];
+      custom?: boolean;
+    })
+  | (FormFieldBase & { type: "number" | "integer"; minimum?: number; maximum?: number; default?: number })
+  | (FormFieldBase & { type: "boolean"; default?: boolean })
+  | (FormFieldBase & {
+      type: "multiselect";
+      options: FormOption[];
+      minItems?: number;
+      maxItems?: number;
+      custom?: boolean;
+      default?: string[];
+    })
+  | { key: string; type: "external"; url: string; title?: string; description?: string };
+
+export type FormValue = string | number | boolean | string[];
+export type FormAnswer = Record<string, FormValue>;
+
+export interface FormRequest {
+  id: string;
+  sessionID: string;
+  title: string;
+  fields: FormField[];
+  /** Tool call that raised the form, when OpenCode reports it. */
+  toolId: string | null;
+}
+
+export type FormStatus = "pending" | "sending" | "answered" | "cancelled" | "expired";
+
+// ------------------------------------------------------------------ errors
+
+export type ErrorAction = "changeModel" | "retry";
+
+// ------------------------------------------------------------------ budget
+
+export type BudgetLevel = "off" | "small" | "medium" | "large" | "custom";
+
+export interface BudgetLimits {
+  maxCost: number | null;
+  maxSteps: number | null;
+}
+
+export interface BudgetView {
+  level: BudgetLevel;
+  limits: BudgetLimits;
+  /** Cost of the current/last task in USD; null when OpenCode reported no cost. */
+  taskCost: number | null;
+  taskSteps: number;
+  active: boolean;
+  state: "ok" | "warning" | "exceeded";
+  /** Multiplier from "Continue once" overrides (1 = no override). */
+  allowance: number;
+}
 
 export type ToolCategory = "read" | "search" | "shell" | "edit" | "web" | "agent" | "other";
 
@@ -176,7 +295,22 @@ export type UiEvent =
   | { type: "files.changed"; files: string[] }
   | { type: "session.busy" }
   | { type: "session.idle"; outcome: "succeeded" | "failed" | "interrupted" }
-  | { type: "session.error"; message: string }
+  | { type: "session.error"; message: string; error: RawError | null; modelKey: string | null }
+  | { type: "error"; id: string; title: string; detail: string; actions: ErrorAction[] }
+  | { type: "inbox.enqueued"; id: string; text: string; attachments: string[]; delivery: InboxDelivery }
+  | { type: "inbox.delivered"; id: string }
+  | { type: "inbox.cancelled"; id: string }
+  | { type: "inbox.delivery"; id: string; delivery: InboxDelivery }
+  | { type: "form.requested"; form: FormRequest }
+  | { type: "form.sending"; formId: string }
+  | {
+      type: "form.resolved";
+      formId: string;
+      status: "answered" | "cancelled" | "expired" | "pending";
+      answer: FormAnswer | null;
+    }
+  | { type: "budget"; id: string; state: "warning" | "stopped"; text: string }
+  | { type: "budget.resolved"; id: string; resolution: "continued" | "increased" | "new-session" }
   | { type: "session.retry"; attempt: number; message: string }
   | { type: "session.renamed"; title: string }
   | { type: "usage.step"; tokens: TokenUsage; modelKey: string | null }

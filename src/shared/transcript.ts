@@ -179,6 +179,8 @@ export class Transcript {
             changed.push(this.upsert({ ...item, status, detail }));
           } else if (item.kind === "permission" && (item.status === "pending" || item.status === "sending")) {
             changed.push(this.upsert({ ...item, status: "expired" }));
+          } else if (item.kind === "form" && (item.status === "pending" || item.status === "sending")) {
+            changed.push(this.upsert({ ...item, status: "expired" }));
           }
         }
         if (this.turnFiles.size) {
@@ -211,6 +213,32 @@ export class Transcript {
             text: `Retrying (attempt ${ev.attempt}): ${ev.message}`,
           }),
         ];
+      case "error":
+        return [
+          this.upsert({ kind: "error", id: ev.id, title: ev.title, detail: ev.detail, actions: ev.actions }),
+        ];
+      case "form.requested": {
+        const id = `form:${ev.form.id}`;
+        const prev = this.get(id);
+        if (prev?.kind === "form" && prev.status !== "pending" && prev.status !== "sending") return [];
+        return [this.upsert({ kind: "form", id, form: ev.form, status: "pending", answer: null })];
+      }
+      case "form.sending":
+      case "form.resolved": {
+        const id = `form:${ev.formId}`;
+        const prev = this.get(id);
+        if (prev?.kind !== "form") return [];
+        if (ev.type === "form.sending") return [this.upsert({ ...prev, status: "sending" })];
+        if (prev.status === "answered" && ev.status !== "answered") return [];
+        return [this.upsert({ ...prev, status: ev.status, answer: ev.answer ?? prev.answer })];
+      }
+      case "budget":
+        return [this.upsert({ kind: "budget", id: ev.id, state: ev.state, text: ev.text, resolved: null })];
+      case "budget.resolved": {
+        const prev = this.get(ev.id);
+        if (prev?.kind !== "budget") return [];
+        return [this.upsert({ ...prev, resolved: ev.resolution })];
+      }
       case "notice":
         return [
           this.upsert({ kind: "notice", id: `notice:${this.items.length}`, level: ev.level, text: ev.text }),

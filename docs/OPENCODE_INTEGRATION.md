@@ -84,3 +84,20 @@ The event stream is global, so the controller filters by `sessionID`. Event payl
 
 - A location OpenCode has not loaded yet can briefly return an empty model list. The controller retries once.
 - The agent's default model can differ from `GET /api/model/default`, so new sessions are always created with an explicit model.
+
+## v0.2 endpoints and events
+
+| Purpose                 | Endpoint / event                                                                                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Steer / queue a message | `POST /api/session/{id}/prompt` with `delivery: "steer" \| "queue"` (verified: steer is injected at the next step boundary; queue is delivered after the current task, within the same execution) |
+| Pending messages        | `GET /api/session/{id}/inbox`, `DELETE /api/session/{id}/inbox/{inboxID}`; events `session.inbox.enqueued/delivered/cancelled/delivery.changed`                                                   |
+| Questions / forms       | events `form.created` (session id inside `form`), `form.replied`, `form.cancelled`; `GET /api/session/{id}/form`, `POST …/form/{formID}/reply { answer }`, `DELETE …/form/{formID}`               |
+| Model variants          | `Model.variants[].id`; `variant` on `Model.Ref` for `POST /api/session` and `POST /api/session/{id}/model`                                                                                        |
+| Agent-only changes      | `GET /api/session/{id}/diff?from=<first user msg>&to=<last user msg>`, with `context` omitted to get full-file patches                                                                            |
+| Error details           | `session.execution.failed.error { type, message, status?, response.body? }`; the model comes from the preceding `session.step.started`                                                            |
+
+Field types supported in forms are exactly those in `@opencode/schema` `Form.Field`: `string` (with `options`/`custom`, `format`, length and `pattern`), `number`, `integer`, `boolean`, `multiselect`, and `external` (a link). Fields marked `hidden` use their default, and `when` conditions are applied while the user answers. Unknown field types are dropped, never invented.
+
+**Agent-only attribution.** OpenCode snapshots the whole working tree at step boundaries. The session diff compares the first snapshot of the range with the last. Changes that existed before the session (including the user's dirty files) are part of the baseline and are not attributed to the agent. The extension rebuilds both file versions from the full-file patch (`src/core/patch.ts`) and refuses partial or binary patches. If the diff request fails, or the agent's edit tools reported changes the snapshots do not contain, the UI says **Agent-only diff unavailable** and falls back to the workspace diff.
+
+**Budget metrics actually used.** `session.usage.updated.cost` (cumulative session USD) and `session.step.ended` / `session.step.failed` (one per completed agent step). No provider quota endpoint exists, so none is shown.

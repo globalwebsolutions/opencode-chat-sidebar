@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+      - run: npm run build
+      - name: Webview interaction tests (headless Chrome)
+        run: npm run test:webview
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+      - name: Package VSIX (not published)
+        run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: dist-vsix/*.vsix
+          retention-days: 7

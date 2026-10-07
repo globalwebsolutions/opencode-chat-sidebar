@@ -177,6 +177,7 @@ describe("session controller: sessions and prompts", () => {
         agent: "plan",
         modelKey: "opencode-go/kimi",
         outcome: null,
+        variant: null,
         cost: 0.5,
       },
     ];
@@ -263,7 +264,7 @@ describe("session controller: sessions and prompts", () => {
 
   it("loads changed files from the session diff after edits", async () => {
     const { c, client } = env;
-    client.diff = [{ file: "a.txt", additions: 1, deletions: 0, status: "modified" }];
+    client.diff = [{ file: "a.txt", patch: "", additions: 1, deletions: 0, status: "modified" }];
     await c.send("edit", []);
     c.handleRawEvent(
       raw("session.step.ended", {

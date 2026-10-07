@@ -106,6 +106,7 @@ export class WorkspaceTracker implements vscode.Disposable {
         const repo = this.git?.getRepository(vscode.Uri.file(detection.root)) ?? null;
         this.watchRepository(repo);
         const head = repo?.state.HEAD;
+        next.uncommitted = repo ? this.changeList(repo).length : null;
         if (repo && head && (head.name || head.commit)) {
           next.branch = head.name ?? null;
           next.detachedAt = head.name ? null : (head.commit?.slice(0, 7) ?? null);
@@ -134,6 +135,30 @@ export class WorkspaceTracker implements vscode.Disposable {
     this.watchedRoot = root;
   }
 
+  private changeList(
+    repo: GitRepository,
+  ): Array<{ absPath: string; status: "added" | "deleted" | "modified" }> {
+    const seen = new Map<string, "added" | "deleted" | "modified">();
+    const st = repo.state;
+    for (const c of [...st.indexChanges, ...st.workingTreeChanges, ...(st.untrackedChanges ?? [])]) {
+      // vscode.git Status: 1 INDEX_ADDED, 7 UNTRACKED, 9 INTENT_TO_ADD → added; 2 INDEX_DELETED, 6 DELETED → deleted.
+      const status = [1, 7, 9].includes(c.status)
+        ? "added"
+        : [2, 6].includes(c.status)
+          ? "deleted"
+          : "modified";
+      if (!seen.has(c.uri.fsPath) || status !== "modified") seen.set(c.uri.fsPath, status);
+    }
+    return [...seen].map(([absPath, status]) => ({ absPath, status }));
+  }
+
+  /** Uncommitted changes of the active repository (HEAD ↔ working tree), or null without Git. */
+  workspaceChanges(): Array<{ absPath: string; status: "added" | "deleted" | "modified" }> | null {
+    const root = this.info.repoRoot;
+    const repo = root ? (this.git?.getRepository(vscode.Uri.file(root)) ?? null) : null;
+    return repo ? this.changeList(repo) : null;
+  }
+
   /** Resolves a path reported by OpenCode (relative to the active folder) to an absolute path inside it. */
   resolveInActive(p: string): string | null {
     const root = this.info.active?.path;
@@ -160,5 +185,6 @@ function emptyInfo(): WorkspaceInfo {
     repoKind: "unknown",
     repoRoot: null,
     mainWorktree: null,
+    uncommitted: null,
   };
 }

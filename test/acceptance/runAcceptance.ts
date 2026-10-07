@@ -23,7 +23,42 @@ const vscodeExecutablePath =
   (process.platform === "darwin" ? "/Applications/Visual Studio Code.app/Contents/MacOS/Code" : undefined);
 
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString();
+  // Never take optional index locks: the repository may be in use by another agent.
+  return execFileSync("git", ["--no-optional-locks", ...args], {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+  }).toString();
+}
+
+/** Other OpenCode sessions currently running in `dir` (read-only API query). */
+async function activeSessionsIn(dir: string): Promise<string[]> {
+  try {
+    const svc = JSON.parse(
+      fs.readFileSync(
+        path.join(
+          process.env.XDG_STATE_HOME ?? path.join(os.homedir(), ".local", "state"),
+          "opencode",
+          "service.json",
+        ),
+        "utf8",
+      ),
+    );
+    const headers = { authorization: "Basic " + Buffer.from("opencode:" + svc.password).toString("base64") };
+    const active = (await (await fetch(new URL("/api/session/active", svc.url), { headers })).json()) as {
+      data: Record<string, unknown>;
+    };
+    const out: string[] = [];
+    for (const id of Object.keys(active.data ?? {})) {
+      const s = (await (await fetch(new URL(`/api/session/${id}`, svc.url), { headers })).json()) as {
+        data?: { location?: { directory?: string } };
+      };
+      if (s.data?.location?.directory === dir) out.push(id);
+    }
+    return out;
+  } catch {
+    return [];
+  }
 }
 
 /** Fingerprint of a repository's working state (read-only git plumbing). */
@@ -52,6 +87,7 @@ function makeFixture(base: string): { repo: string; worktree: string } {
   const g = (...args: string[]) => execFileSync("git", args, { cwd: repo, env, stdio: "pipe" });
   g("init", "-q", "-b", "main");
   fs.writeFileSync(path.join(repo, "a.txt"), "hello\n");
+  fs.writeFileSync(path.join(repo, "b.txt"), "unrelated file\n");
   fs.writeFileSync(path.join(repo, ".gitignore"), ".env\n");
   g("add", ".");
   g("commit", "-qm", "init");
@@ -73,6 +109,14 @@ async function runScenario(
   const shortTmp = process.platform === "win32" ? os.tmpdir() : "/tmp";
   const userData = fs.mkdtempSync(path.join(shortTmp, `ocs-${scenario.slice(0, 3)}-`));
   userDataDirs.push(userData);
+  if (scenario === "real-repo") {
+    // Keep VS Code's Git extension out of a repository someone else may be working in.
+    fs.mkdirSync(path.join(userData, "User"), { recursive: true });
+    fs.writeFileSync(
+      path.join(userData, "User", "settings.json"),
+      JSON.stringify({ "git.enabled": false, "git.autorefresh": false }),
+    );
+  }
   try {
     await runTests({
       vscodeExecutablePath,
@@ -132,11 +176,15 @@ async function main(): Promise<void> {
 
   const real = process.env.ACCEPT_REAL_REPO;
   if (real) {
+    const concurrentBefore = await activeSessionsIn(real);
     const before = fingerprint(real);
     const r = await runScenario("real-repo", real, base);
     const after = fingerprint(real);
-    summary.realRepo = { ...r, repositoryUnchanged: before === after };
-    if (!r.ok || before !== after) failed = true;
+    const concurrent = [...new Set([...concurrentBefore, ...(await activeSessionsIn(real))])];
+    // With another agent working in the repository, the fingerprint cannot prove anything about
+    // this run; the suite instead verifies OpenCode's snapshot diff of every session it created.
+    summary.realRepo = { ...r, repositoryUnchanged: before === after, concurrentSessions: concurrent };
+    if (!r.ok || (before !== after && concurrent.length === 0)) failed = true;
   }
   for (const [name, ws] of (process.env.ACCEPT_ONLY_REAL
     ? []

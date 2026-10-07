@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { ChatViewProvider, VIEW_ID } from "./host/chatView";
-import { EMPTY_SCHEME, EmptyDocumentProvider } from "./host/diff";
+import { AGENT_SCHEME, AgentDocumentProvider, EMPTY_SCHEME, EmptyDocumentProvider } from "./host/diff";
 import { Logger } from "./host/log";
 
 /**
@@ -15,6 +15,10 @@ export function activate(context: vscode.ExtensionContext) {
     provider,
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider),
     vscode.workspace.registerTextDocumentContentProvider(EMPTY_SCHEME, new EmptyDocumentProvider()),
+    vscode.workspace.registerTextDocumentContentProvider(
+      AGENT_SCHEME,
+      new AgentDocumentProvider(() => provider),
+    ),
     vscode.commands.registerCommand("opencodeSidebar.focusChat", () => provider.focus()),
     vscode.commands.registerCommand("opencodeSidebar.newSession", () => provider.newSession()),
     vscode.commands.registerCommand("opencodeSidebar.addCurrentFile", () => provider.addCurrentFile()),

@@ -2,9 +2,14 @@
 // interface; `HttpOpenCodeClient` implements it on top of the OpenCode v2 HTTP
 // API (the same surface used by the official `opencode` CLI and clients).
 
+import { parseForm } from "../core/forms";
 import type {
   AgentOption,
+  FormAnswer,
+  FormRequest,
+  InboxDelivery,
   ModelOption,
+  PendingInboxItem,
   PermissionDecision,
   PermissionRequest,
   SessionSummary,
@@ -23,8 +28,17 @@ export interface ServerInfo {
   pid: number | null;
 }
 
+export interface ModelRef {
+  providerID: string;
+  id: string;
+  /** Model variant (e.g. reasoning effort); omitted = model default. */
+  variant?: string;
+}
+
 export interface FileDiffInfo {
   file: string;
+  /** Unified patch; full-file when requested with `full: true`. */
+  patch: string;
   additions: number;
   deletions: number;
   status: "added" | "deleted" | "modified";
@@ -48,17 +62,13 @@ export interface OpenCodeClient {
   listAgents(directory: string): Promise<AgentOption[]>;
   listSessions(directory: string, limit: number): Promise<SessionSummary[]>;
   getSession(id: string): Promise<SessionSummary>;
-  createSession(input: {
-    directory: string;
-    agent?: string;
-    model?: { providerID: string; id: string };
-  }): Promise<SessionSummary>;
+  createSession(input: { directory: string; agent?: string; model?: ModelRef }): Promise<SessionSummary>;
   listMessages(id: string, max: number): Promise<unknown[]>;
   prompt(
     id: string,
-    input: { text: string; files: Array<{ uri: string; name: string }> },
+    input: { text: string; files: Array<{ uri: string; name: string }>; delivery?: InboxDelivery },
   ): Promise<{ id: string }>;
-  switchModel(id: string, model: { providerID: string; id: string }): Promise<void>;
+  switchModel(id: string, model: ModelRef): Promise<void>;
   switchAgent(id: string, agent: string): Promise<void>;
   /** Ids of sessions that are currently executing. */
   activeSessions(): Promise<Set<string>>;
@@ -66,8 +76,25 @@ export interface OpenCodeClient {
   interrupt(id: string): Promise<boolean>;
   listPermissions(id: string): Promise<PermissionRequest[]>;
   replyPermission(id: string, requestId: string, decision: PermissionDecision): Promise<void>;
-  sessionDiff(id: string): Promise<FileDiffInfo[]>;
+  /**
+   * Agent changes recorded by OpenCode snapshots. With `from`/`to` (user message ids) the
+   * range spans several turns; `full` requests full-file patches.
+   */
+  sessionDiff(id: string, range?: { from?: string; to?: string; full?: boolean }): Promise<FileDiffInfo[]>;
+  listForms(id: string): Promise<FormRequest[]>;
+  replyForm(id: string, formId: string, answer: FormAnswer): Promise<void>;
+  cancelForm(id: string, formId: string): Promise<void>;
+  listInbox(id: string): Promise<PendingInboxItem[]>;
+  cancelInbox(id: string, inboxId: string): Promise<void>;
+  /** Text of the first user message, used for local title fallbacks. */
+  firstUserText(id: string): Promise<string | null>;
   subscribe(handlers: EventHandlers): EventSubscription;
+}
+
+function modelBody(model: ModelRef): Rec {
+  const body: Rec = { providerID: model.providerID, id: model.id };
+  if (model.variant) body.variant = model.variant;
+  return body;
 }
 
 export class OpenCodeHttpError extends Error {
@@ -100,6 +127,7 @@ export function toSessionSummary(raw: unknown): SessionSummary {
     updated: typeof time.updated === "number" ? time.updated : 0,
     agent: str(d.agent),
     modelKey: modelKey(d.model),
+    variant: str(rec(d.model).variant),
     outcome: outcome === "succeeded" || outcome === "failed" || outcome === "interrupted" ? outcome : null,
     cost: typeof d.cost === "number" ? d.cost : null,
   };
@@ -117,6 +145,9 @@ export function toModelOption(raw: unknown, providerNames: Map<string, string>):
     providerID,
     id,
     name: str(d.name) ?? id,
+    variants: Array.isArray(d.variants)
+      ? d.variants.map((v) => str(rec(v).id)).filter((v): v is string => !!v && v !== "default")
+      : [],
     providerName: providerNames.get(providerID) ?? providerID,
     contextLimit: typeof limit.context === "number" && limit.context > 0 ? limit.context : null,
   };
@@ -253,11 +284,11 @@ export class HttpOpenCodeClient implements OpenCodeClient {
   async createSession(input: {
     directory: string;
     agent?: string;
-    model?: { providerID: string; id: string };
+    model?: ModelRef;
   }): Promise<SessionSummary> {
     const body: Rec = { location: { directory: input.directory } };
     if (input.agent) body.agent = input.agent;
-    if (input.model) body.model = { providerID: input.model.providerID, id: input.model.id };
+    if (input.model) body.model = modelBody(input.model);
     const d = rec(await this.request("POST", "/api/session", { body }));
     return toSessionSummary(d.data);
   }
@@ -284,17 +315,18 @@ export class HttpOpenCodeClient implements OpenCodeClient {
 
   async prompt(
     id: string,
-    input: { text: string; files: Array<{ uri: string; name: string }> },
+    input: { text: string; files: Array<{ uri: string; name: string }>; delivery?: InboxDelivery },
   ): Promise<{ id: string }> {
     const body: Rec = { text: input.text };
     if (input.files.length) body.files = input.files;
+    if (input.delivery) body.delivery = input.delivery;
     const d = rec(await this.request("POST", `/api/session/${encodeURIComponent(id)}/prompt`, { body }));
     return { id: str(rec(d.data).id) ?? "" };
   }
 
-  async switchModel(id: string, model: { providerID: string; id: string }): Promise<void> {
+  async switchModel(id: string, model: ModelRef): Promise<void> {
     await this.request("POST", `/api/session/${encodeURIComponent(id)}/model`, {
-      body: { model: { providerID: model.providerID, id: model.id } },
+      body: { model: modelBody(model) },
     });
   }
 
@@ -326,9 +358,15 @@ export class HttpOpenCodeClient implements OpenCodeClient {
     );
   }
 
-  async sessionDiff(id: string): Promise<FileDiffInfo[]> {
+  async sessionDiff(
+    id: string,
+    range: { from?: string; to?: string; full?: boolean } = {},
+  ): Promise<FileDiffInfo[]> {
+    const query: Record<string, string | undefined> = { from: range.from, to: range.to };
+    // Omitting `context` yields full-file patches; a small context keeps payloads light otherwise.
+    if (!range.full) query.context = "3";
     const d = rec(
-      await this.request("GET", `/api/session/${encodeURIComponent(id)}/diff`, { timeoutMs: 30_000 }),
+      await this.request("GET", `/api/session/${encodeURIComponent(id)}/diff`, { query, timeoutMs: 30_000 }),
     );
     const list = Array.isArray(d.data) ? d.data : [];
     const out: FileDiffInfo[] = [];
@@ -338,12 +376,72 @@ export class HttpOpenCodeClient implements OpenCodeClient {
       if (!file) continue;
       out.push({
         file,
+        patch: str(r.patch) ?? "",
         additions: typeof r.additions === "number" ? r.additions : 0,
         deletions: typeof r.deletions === "number" ? r.deletions : 0,
         status: r.status === "added" || r.status === "deleted" ? r.status : "modified",
       });
     }
     return out;
+  }
+
+  async listForms(id: string): Promise<FormRequest[]> {
+    const d = rec(await this.request("GET", `/api/session/${encodeURIComponent(id)}/form`));
+    const list = Array.isArray(d.data) ? d.data : [];
+    return list.map(parseForm).filter((f): f is FormRequest => f !== null);
+  }
+
+  async replyForm(id: string, formId: string, answer: FormAnswer): Promise<void> {
+    await this.request(
+      "POST",
+      `/api/session/${encodeURIComponent(id)}/form/${encodeURIComponent(formId)}/reply`,
+      {
+        body: { answer },
+      },
+    );
+  }
+
+  async cancelForm(id: string, formId: string): Promise<void> {
+    await this.request("DELETE", `/api/session/${encodeURIComponent(id)}/form/${encodeURIComponent(formId)}`);
+  }
+
+  async listInbox(id: string): Promise<PendingInboxItem[]> {
+    const d = rec(await this.request("GET", `/api/session/${encodeURIComponent(id)}/inbox`));
+    const list = Array.isArray(d.data) ? d.data : [];
+    const out: PendingInboxItem[] = [];
+    for (const raw of list) {
+      const r = rec(raw);
+      const payload = rec(r.payload);
+      const inboxId = str(r.id);
+      if (r.type !== "user" || !inboxId) continue;
+      const files = Array.isArray(payload.files) ? payload.files : [];
+      out.push({
+        id: inboxId,
+        text: str(payload.text) ?? "",
+        attachments: files.map((f) => str(rec(f).name) ?? "file"),
+        delivery: r.delivery === "queue" ? "queue" : "steer",
+      });
+    }
+    return out;
+  }
+
+  async cancelInbox(id: string, inboxId: string): Promise<void> {
+    await this.request(
+      "DELETE",
+      `/api/session/${encodeURIComponent(id)}/inbox/${encodeURIComponent(inboxId)}`,
+    );
+  }
+
+  async firstUserText(id: string): Promise<string | null> {
+    // A fresh request without a cursor may use `order`.
+    const d = rec(
+      await this.request("GET", `/api/session/${encodeURIComponent(id)}/message`, {
+        query: { order: "asc", limit: "10", type: "user" },
+      }),
+    );
+    const list = Array.isArray(d.data) ? d.data : [];
+    for (const m of list) if (rec(m).type === "user") return str(rec(m).text);
+    return null;
   }
 
   /** Opens the global event stream and reconnects with backoff until disposed. */

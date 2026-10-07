@@ -189,7 +189,12 @@ describe("event normalization", () => {
         }),
       )?.events,
       [
-        { type: "session.error", message: "ConnectionRefused" },
+        {
+          type: "session.error",
+          message: "ConnectionRefused",
+          error: { type: "provider.transport", message: "ConnectionRefused", status: null, body: null },
+          modelKey: null,
+        },
         { type: "session.idle", outcome: "failed" },
       ],
     );

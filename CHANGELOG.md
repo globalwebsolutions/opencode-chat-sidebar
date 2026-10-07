@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 — unreleased
+
+Daily-use improvements on top of 0.1.0 (same architecture).
+
+- **Copy** under every completed answer copies the original Markdown exactly (from OpenCode's message text, not the rendered page), with ✓ Copied feedback. Code blocks keep a separate **Copy code**.
+- **Task budget guard** (Off/Small/Medium/Large/Custom) based on OpenCode-reported cost and steps. It warns at 80%, interrupts at the limit, and offers Continue once / Increase budget / Start new session. Context-window warning added.
+- **Questions/forms** from OpenCode render as cards (text, choices, custom answers, yes/no, numbers, multi-select) and come back when a session is reopened.
+- **Agent-only changes** from OpenCode session snapshots (whole session, full-file patches) in the native diff editor, separate from **Workspace changes**. When attribution isn't reliable, the sidebar says “Agent-only diff unavailable”.
+- **Steer / Queue** follow-ups while the agent runs, using OpenCode's inbox delivery, with pending items you can Edit or Remove.
+- **Model variants** (e.g. reasoning effort) when OpenCode lists them, remembered per workspace and model. Models are grouped by provider, with a provider and context caption.
+- **Readable provider errors** (insufficient funds, quota, rate limit, auth, unknown model, context length, overload, network) with Change model / Retry. Full details are logged.
+- **Session titles**: broken generated titles are replaced with a short title from the first message.
+- Session metrics: context, cost, steps and the task meter.
+- High-contrast styling and Arabic copy/budget strings; `dir="auto"` for right-to-left text.
+- One-time tip recommending the Secondary Side Bar.
+- Fix: the changed-files panel now covers the whole session (0.1.0 showed only the latest turn).
+- Tests: browser click-through tests of the webview, plus more unit and acceptance coverage. CI workflow added (no publishing).
+
 ## 0.1.0 — unreleased
 
 First local preview.

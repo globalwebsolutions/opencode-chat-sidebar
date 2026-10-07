@@ -12,7 +12,7 @@ import { classifyPath } from "../core/sensitive";
 import { SessionController } from "../core/sessionController";
 import { HttpOpenCodeClient, type EventSubscription } from "../opencode/client";
 import { discoverServer, startService } from "../opencode/service";
-import type { ConnectionStatus, ContextAttachment, UiEvent } from "../shared/model";
+import type { BudgetLevel, ConnectionStatus, ContextAttachment, UiEvent } from "../shared/model";
 import {
   parseWebviewMessage,
   type HostMessage,
@@ -20,13 +20,24 @@ import {
   type WebviewMessage,
 } from "../shared/protocol";
 import { CONFIG_SECTION, readConfig } from "./config";
-import { openAllDiffs, openFileDiff } from "./diff";
+import { openAgentDiffs, openAgentFileDiff, openAllDiffs, openFileDiff, type AgentSideSource } from "./diff";
 import type { Logger } from "./log";
 import { WorkspaceTracker } from "./workspace";
 
 export const VIEW_ID = "opencodeSidebar.chat";
+const HINT_KEY = "opencodeSidebar.placementHintDismissed";
 
-export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+function uiLocale(): "en" | "ar" {
+  return vscode.env.language.toLowerCase().startsWith("ar") ? "ar" : "en";
+}
+
+const AR_STRINGS = {
+  budgetWarning: "اقتربت المهمة من حد الاستهلاك المحدد.",
+  budgetStopped: "تم بلوغ حد استهلاك المهمة. تم إيقاف الوكيل.",
+  contextWarning: (p: number) => `نافذة السياق ممتلئة بنسبة ${p}٪. يُفضّل بدء جلسة جديدة.`,
+};
+
+export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disposable, AgentSideSource {
   private view: vscode.WebviewView | undefined;
   private webviewReady = false;
   private connection: ConnectionStatus = { kind: "connecting" };
@@ -149,13 +160,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       agents: c?.agents ?? null,
       selectedModel: c?.selectedModel ?? null,
       selectedAgent: c?.selectedAgent ?? null,
-      sessions: c?.sessions ?? [],
-      currentSession: c?.current ? { id: c.current.id, title: c.current.title } : null,
+      sessions: c?.displaySessions() ?? [],
+      currentSession: c?.current ? { id: c.current.id, title: c.currentTitle() ?? "Untitled session" } : null,
       busy: c?.busy ?? false,
       stopping: c?.stopping ?? false,
       attachments: this.attachments.map(chipFor),
-      changes: c?.changes ?? [],
+      agentChanges: c?.agentChanges ?? { status: "none" },
+      workspaceChanges:
+        this.workspace.current.uncommitted === null ? null : { count: this.workspace.current.uncommitted },
       usage: cfg.showUsage ? (c?.usage() ?? null) : null,
+      steps: c?.steps ?? 0,
+      selectedVariant: c?.selectedVariant ?? null,
+      budget: c?.budgetView() ?? {
+        level: cfg.budgetDefault,
+        limits: { maxCost: null, maxSteps: null },
+        taskCost: null,
+        taskSteps: 0,
+        active: false,
+        state: "ok",
+        allowance: 1,
+      },
+      budgetPresets: cfg.budget.presets,
+      pending: c?.pending ?? [],
+      locale: uiLocale(),
+      showPlacementHint: !this.context.globalState.get<boolean>(HINT_KEY, false),
     };
   }
 
@@ -243,7 +271,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       this.log,
       () => {
         const c = readConfig();
-        return { model: c.defaultModel.trim(), agent: c.defaultAgent.trim() };
+        return {
+          model: c.defaultModel.trim(),
+          agent: c.defaultAgent.trim(),
+          budgetLevel: c.budgetDefault,
+          budget: c.budget,
+          contextWarnPercent: c.contextWarnPercent,
+          strings: uiLocale() === "ar" ? AR_STRINGS : undefined,
+        };
       },
     );
     this.controller = controller;
@@ -493,7 +528,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       case "send": {
         if (!c) return;
         const attachments = this.attachments;
-        const sent = await c.send(msg.text, attachments);
+        const sent = await c.send(msg.text, attachments, msg.delivery);
         if (sent) {
           this.attachments = [];
           this.postState();
@@ -530,22 +565,66 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         return c?.respondPermission(msg.requestId, msg.decision);
       case "openFile":
         return this.openFile(msg.path);
-      case "openDiff": {
-        const change = c?.changes.find((f) => f.path === msg.path);
-        const abs = this.workspace.resolveInActive(msg.path);
-        if (!abs) return;
-        await openFileDiff(this.workspace.gitApi, abs, change?.status ?? "modified");
-        return;
-      }
-      case "openAllDiffs": {
-        const files = (c?.changes ?? [])
-          .map((f) => ({ absPath: this.workspace.resolveInActive(f.path), status: f.status }))
-          .filter((f): f is { absPath: string; status: typeof f.status } => !!f.absPath);
+      case "openDiff":
+      case "openAgentDiff":
+        return this.openAgentDiff(msg.path);
+      case "openAllDiffs":
+      case "openAgentDiffAll":
+        return this.openAgentDiffAll();
+      case "openWorkspaceDiffAll": {
+        const files = this.workspace.workspaceChanges();
+        if (!files || files.length === 0) {
+          void vscode.window.showInformationMessage("OpenCode: no uncommitted workspace changes.");
+          return;
+        }
         await openAllDiffs(this.workspace.gitApi, files);
         return;
       }
       case "copy":
-        await vscode.env.clipboard.writeText(msg.text);
+        return this.copy(msg.requestId, msg.text);
+      case "copyMessage": {
+        const text = c?.copyText(msg.itemId) ?? null;
+        if (text === null) {
+          this.post({ type: "copyResult", requestId: msg.requestId, ok: false });
+          return;
+        }
+        return this.copy(msg.requestId, text);
+      }
+      case "selectVariant":
+        return c?.selectVariant(msg.variant === "" ? null : msg.variant);
+      case "selectBudget":
+        return c?.selectBudget(msg.level as BudgetLevel);
+      case "budgetAction":
+        if (!c) return;
+        if (msg.action === "continue") await c.budgetContinueOnce(msg.itemId);
+        else if (msg.action === "increase") await c.budgetIncrease(msg.itemId);
+        else await c.budgetNewSession(msg.itemId);
+        return;
+      case "answerForm": {
+        if (!c) return;
+        const error = await c.answerForm(msg.formId, msg.answer);
+        if (error) this.post({ type: "formError", formId: msg.formId, error });
+        return;
+      }
+      case "cancelForm":
+        return c?.cancelForm(msg.formId);
+      case "editPending": {
+        const text = (await c?.cancelPending(msg.id)) ?? null;
+        if (text !== null) this.post({ type: "restoreInput", text });
+        return;
+      }
+      case "removePending":
+        await c?.cancelPending(msg.id);
+        return;
+      case "retryLast":
+        await c?.retry();
+        return;
+      case "focusModelPicker":
+        this.post({ type: "focusModel" });
+        return;
+      case "dismissHint":
+        await this.context.globalState.update(HINT_KEY, true);
+        this.postState();
         return;
       case "openLink":
         return this.openLink(msg.href);
@@ -563,6 +642,61 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.log.show();
         return;
     }
+  }
+
+  private async copy(requestId: string, text: string): Promise<void> {
+    try {
+      await vscode.env.clipboard.writeText(text);
+      this.post({ type: "copyResult", requestId, ok: true });
+    } catch (e) {
+      this.log.error("Clipboard write failed", e);
+      this.post({ type: "copyResult", requestId, ok: false });
+    }
+  }
+
+  /** AgentSideSource for the agent-diff document provider. */
+  sides(sessionId: string, file: string): { before: string; after: string } | null {
+    const c = this.controller;
+    if (!c || c.current?.id !== sessionId) return null;
+    return c.agentFileSides(file);
+  }
+
+  private async openAgentDiff(file: string): Promise<void> {
+    const c = this.controller;
+    const abs = this.workspace.resolveInActive(file);
+    if (!c?.current || !abs) return;
+    if (c.agentChanges.status === "ok" && c.agentFileSides(file)) {
+      await openAgentFileDiff(c.current.id, file);
+      return;
+    }
+    // Never guess ownership: fall back to the plain workspace diff and say so.
+    void vscode.window.showWarningMessage(
+      `Agent-only diff unavailable for ${file}. Showing the workspace diff (HEAD ↔ working tree) instead.`,
+    );
+    const status = c.changes.find((f) => f.path === file)?.status ?? "modified";
+    await openFileDiff(this.workspace.gitApi, abs, status);
+  }
+
+  private async openAgentDiffAll(): Promise<void> {
+    const c = this.controller;
+    if (!c?.current) return;
+    if (c.agentChanges.status !== "ok") {
+      void vscode.window.showWarningMessage(
+        "Agent-only diff unavailable. Showing workspace changes instead.",
+      );
+      await this.handle({ type: "openWorkspaceDiffAll" });
+      return;
+    }
+    const files = c.agentChanges.files
+      .filter((f) => c.agentFileSides(f.path))
+      .map((f) => ({ file: f.path, absPath: this.workspace.resolveInActive(f.path) }))
+      .filter((f): f is { file: string; absPath: string } => !!f.absPath);
+    if (files.length < c.agentChanges.files.length) {
+      void vscode.window.showWarningMessage(
+        `Agent-only diff unavailable for ${c.agentChanges.files.length - files.length} file(s) (binary or incomplete snapshot).`,
+      );
+    }
+    await openAgentDiffs(c.current.id, files);
   }
 
   private async openFile(p: string): Promise<void> {

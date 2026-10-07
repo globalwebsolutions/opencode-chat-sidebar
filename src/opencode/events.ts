@@ -2,7 +2,8 @@
 // model. Raw transport objects never leave this module.
 
 import { findSensitive } from "../core/sensitive";
-import type { PermissionRequest, TokenUsage, UiEvent } from "../shared/model";
+import { parseForm } from "../core/forms";
+import type { FormAnswer, PermissionRequest, RawError, TokenUsage, UiEvent } from "../shared/model";
 import { splitUserText } from "../shared/userText";
 
 type Rec = Record<string, unknown>;
@@ -58,6 +59,28 @@ function errorMessage(v: unknown, fallback: string): string {
   return s(e?.message) ?? fallback;
 }
 
+export function toRawError(v: unknown): RawError | null {
+  const e = rec(v);
+  if (!e) return null;
+  return {
+    type: s(e.type) ?? "unknown",
+    message: s(e.message) ?? "",
+    status: typeof e.status === "number" ? e.status : null,
+    body: s(rec(e.response)?.body),
+  };
+}
+
+function answerOf(v: unknown): FormAnswer | null {
+  const r = rec(v);
+  if (!r) return null;
+  const out: FormAnswer = {};
+  for (const [k, x] of Object.entries(r)) {
+    if (typeof x === "string" || typeof x === "number" || typeof x === "boolean") out[k] = x;
+    else if (Array.isArray(x)) out[k] = x.filter((y): y is string => typeof y === "string");
+  }
+  return out;
+}
+
 export function toPermissionRequest(v: unknown): PermissionRequest | null {
   const d = rec(v);
   const id = s(d?.id);
@@ -101,6 +124,8 @@ export class EventNormalizer {
   private shells = new Map<string, { cwd: string | null; command: string | null }>();
   private shellTool = new Map<string, { sessionID: string; toolId: string }>();
   private stepModel = new Map<string, string>();
+  /** Last model used per session, so execution failures can name the model. */
+  private sessionModel = new Map<string, string>();
 
   normalize(raw: unknown): NormalizedEnvelope | null {
     const env = rec(raw);
@@ -108,7 +133,7 @@ export class EventNormalizer {
     if (!env || !type) return null;
     const data = rec(env.data) ?? {};
     const directory = s(rec(env.location)?.directory);
-    const sessionID = s(data.sessionID);
+    const sessionID = s(data.sessionID) ?? s(rec(data.form)?.sessionID);
     const out = (events: UiEvent[], sessionsChanged = false): NormalizedEnvelope => ({
       sessionID,
       events,
@@ -128,7 +153,38 @@ export class EventNormalizer {
         const item = rec(data.item);
         const payload = rec(item?.payload);
         if (item?.type !== "user" || !payload) return out([]);
-        return out([userMessageEvent(s(data.inboxID) ?? "?", s(payload.text) ?? "", payload.files)]);
+        const msg = userMessageEvent(s(data.inboxID) ?? "?", s(payload.text) ?? "", payload.files);
+        if (msg.type !== "user.message") return out([]);
+        const delivery = item.delivery === "queue" ? "queue" : "steer";
+        return out([
+          { type: "inbox.enqueued", id: msg.id, text: msg.text, attachments: msg.attachments, delivery },
+        ]);
+      }
+      case "session.inbox.delivered":
+        return out([{ type: "inbox.delivered", id: s(data.inboxID) ?? "?" }]);
+      case "session.inbox.cancelled":
+        return out([{ type: "inbox.cancelled", id: s(data.inboxID) ?? "?" }]);
+      case "session.inbox.delivery.changed":
+        return out([
+          {
+            type: "inbox.delivery",
+            id: s(data.inboxID) ?? "?",
+            delivery: data.delivery === "queue" ? "queue" : "steer",
+          },
+        ]);
+      case "form.created": {
+        const form = parseForm(data.form);
+        return form ? out([{ type: "form.requested", form }]) : null;
+      }
+      case "form.replied": {
+        const id = s(data.id);
+        return id
+          ? out([{ type: "form.resolved", formId: id, status: "answered", answer: answerOf(data.answer) }])
+          : null;
+      }
+      case "form.cancelled": {
+        const id = s(data.id);
+        return id ? out([{ type: "form.resolved", formId: id, status: "cancelled", answer: null }]) : null;
       }
       case "session.execution.started":
         return out([{ type: "session.busy" }]);
@@ -139,7 +195,12 @@ export class EventNormalizer {
       case "session.execution.failed":
         return out(
           [
-            { type: "session.error", message: errorMessage(data.error, "The session failed.") },
+            {
+              type: "session.error",
+              message: errorMessage(data.error, "The session failed."),
+              error: toRawError(data.error),
+              modelKey: sessionID ? (this.sessionModel.get(sessionID) ?? null) : null,
+            },
             { type: "session.idle", outcome: "failed" },
           ],
           true,
@@ -217,6 +278,7 @@ export class EventNormalizer {
         const id = s(data.assistantMessageID);
         const key = modelKey(data.model);
         if (id && key) this.stepModel.set(id, key);
+        if (sessionID && key) this.sessionModel.set(sessionID, key);
         return out([]);
       }
       case "session.step.ended":
@@ -327,7 +389,12 @@ export function historyToEvents(messages: readonly unknown[]): UiEvent[] {
         const tokens = toTokenUsage(m.tokens);
         if (tokens) events.push({ type: "usage.step", tokens, modelKey: modelKey(m.model) });
         if (rec(m.error) && m.finish === "error") {
-          events.push({ type: "session.error", message: errorMessage(m.error, "The step failed.") });
+          events.push({
+            type: "session.error",
+            message: errorMessage(m.error, "The step failed."),
+            error: toRawError(m.error),
+            modelKey: modelKey(m.model),
+          });
         }
         break;
       }

@@ -64,6 +64,7 @@ describe("HTTP OpenCode client", () => {
         name: "Kimi",
         providerName: "OpenCode Go",
         contextLimit: 1000,
+        variants: [],
       },
     ]);
     assert.equal(captured[0].headers.authorization, AUTH);
@@ -90,6 +91,7 @@ describe("HTTP OpenCode client", () => {
       "name",
       "providerID",
       "providerName",
+      "variants",
     ]);
   });
 
@@ -142,6 +144,7 @@ describe("HTTP OpenCode client", () => {
         agent: "build",
         modelKey: "p/m",
         outcome: null,
+        variant: null,
         cost: 0.1,
       },
     ]);

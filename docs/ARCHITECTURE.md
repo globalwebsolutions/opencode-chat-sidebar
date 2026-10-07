@@ -73,3 +73,22 @@ Context is always explicit (`src/core/context.ts`):
 - Activation registers the view, commands, an output channel and a content provider, and does nothing else. The OpenCode connection, Git tracking and model loading start only when the sidebar is first shown.
 - The extension starts OpenCode only on explicit **Start OpenCode** (or `autoStart`), and only through `opencode service start`. OpenCode guarantees a single shared service, so repeated clicks cannot create duplicate processes; concurrent start requests are also coalesced. The service is shared with other OpenCode clients and is not stopped when VS Code closes.
 - The event stream reconnects with backoff. After a reconnect the open session is reloaded from history to close any gap.
+
+## v0.2 additions
+
+The layering is unchanged. New logic lives in VS Code-free core modules:
+
+| Module                | Responsibility                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------- |
+| `src/core/budget.ts`  | `BudgetTracker`: per-task cost/step accounting, warning/exceeded signals, Continue-once allowance |
+| `src/core/forms.ts`   | Parses OpenCode `Form.Info`, conditional (`when`) fields, answer validation                       |
+| `src/core/patch.ts`   | Rebuilds before/after file contents from OpenCode full-file session patches                       |
+| `src/core/errors.ts`  | Classifies provider errors into readable messages and safe log lines                              |
+| `src/core/titles.ts`  | Detects broken generated titles and derives a local fallback                                      |
+| `src/webview/i18n.ts` | English/Arabic strings for the new controls                                                       |
+
+- **Copy** never reads the DOM. The webview sends `copyMessage { itemId }`; the host looks up the canonical text in its `Transcript` (OpenCode's `session.text.ended` / stored message text) and writes it to the clipboard, so there is no size limit or Markdown round-trip. `copyText()` returns nothing while a message is still streaming. The webview gets `copyResult` back and shows “✓ Copied” for about 1.8 s.
+- **Budget**: `SessionController` feeds `usage.step` and `usage.session` into `BudgetTracker` only for live events; replayed history never counts. Signals become `budget` transcript items. Exceeding the limit calls the same `stop()` path as the Stop button. Controller-generated events are deferred until the current batch is applied, so host and webview see the same order.
+- **Inbox (steer/queue)**: `inbox.*` events are handled by the controller. Pending items live in `ViewState.pending`; on `inbox.delivered` the controller emits a `user.message`, so the transcript shows messages in the order the agent received them.
+- **Agent changes** (`ViewState.agentChanges`) replace v0.1's `changes`. Patches stay in the host. `AgentDocumentProvider` (scheme `opencode-sidebar-agent`) serves the reconstructed sides to `vscode.diff` / `vscode.changes`. **Workspace changes** come from the Git extension (`uncommitted` count, HEAD ↔ working tree).
+- **Webview rendering**: item updates are coalesced into one render per animation frame. Focus is restored by `data-key` after an item re-renders, so keyboard users keep their place.

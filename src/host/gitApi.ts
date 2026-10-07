@@ -8,8 +8,17 @@ export interface GitRef {
   commit?: string;
 }
 
+export interface GitChange {
+  uri: vscode.Uri;
+  /** vscode.git Status enum value. */
+  status: number;
+}
+
 export interface GitRepositoryState {
   HEAD: GitRef | undefined;
+  workingTreeChanges: GitChange[];
+  indexChanges: GitChange[];
+  untrackedChanges?: GitChange[];
   onDidChange: vscode.Event<void>;
 }
 

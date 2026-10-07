@@ -1,15 +1,26 @@
-// Session-level behaviour (sessions, model/agent selection, prompting,
-// streaming, permissions, cancellation, changed files, usage) on top of the
-// OpenCodeClient adapter. Free of VS Code APIs so it can be unit-tested.
+// Session-level behaviour (sessions, model/agent/variant selection, prompting,
+// steering/queueing, streaming, permissions, forms, cancellation, budget guard,
+// agent changes, usage) on top of the OpenCodeClient adapter. Free of VS Code
+// APIs so it can be unit-tested.
 
-import { buildPrompt } from "./context";
+import { BudgetTracker, nextLevel, type BudgetSettings } from "./budget";
+import { buildPrompt, type PromptPayload } from "./context";
+import { classifyError, describeForLog } from "./errors";
+import { summarizeAnswer, validateAnswer } from "./forms";
+import { reconstructSides, type FileSides } from "./patch";
+import { displayTitle, isUsableTitle } from "./titles";
 import { OpenCodeHttpError, type OpenCodeClient } from "../opencode/client";
 import { describeSensitive, EventNormalizer, historyToEvents } from "../opencode/events";
 import type {
   AgentOption,
+  BudgetLevel,
+  BudgetView,
   ContextAttachment,
   FileChange,
+  FormAnswer,
+  InboxDelivery,
   ModelOption,
+  PendingInboxItem,
   PermissionDecision,
   SessionSummary,
   TokenUsage,
@@ -39,7 +50,30 @@ export interface ControllerSink {
 export interface ControllerDefaults {
   model: string;
   agent: string;
+  /** Budget level used when the workspace has no remembered choice. */
+  budgetLevel?: BudgetLevel;
+  budget?: BudgetSettings;
+  /** Warn when the context window is this full (0–100; 0 disables). */
+  contextWarnPercent?: number;
+  /** Localized UI strings for controller-generated messages. */
+  strings?: Partial<ControllerStrings>;
 }
+
+export interface ControllerStrings {
+  budgetWarning: string;
+  budgetStopped: string;
+  contextWarning: (percent: number) => string;
+}
+
+const EN_STRINGS: ControllerStrings = {
+  budgetWarning: "Task budget is nearly exhausted.",
+  budgetStopped: "Task budget reached. The agent was stopped.",
+  contextWarning: (p) => `The context window is ${p}% full. Consider starting a new session.`,
+};
+
+/** Agent-attributed changes from OpenCode's session snapshots. */
+export type AgentChanges =
+  { status: "none" } | { status: "ok"; files: FileChange[] } | { status: "unavailable"; reason: string };
 
 export const HISTORY_LIMIT = 400;
 const SESSION_LIST_LIMIT = 30;
@@ -67,19 +101,37 @@ export class SessionController {
   agents: AgentOption[] | null = null;
   selectedModel: string | null = null;
   selectedAgent: string | null = null;
+  /** Selected variant for the selected model; null = model default. */
+  selectedVariant: string | null = null;
   sessions: SessionSummary[] = [];
   current: SessionSummary | null = null;
   busy = false;
   stopping = false;
-  changes: FileChange[] = [];
+  /** Agent changes for the whole session (snapshot attribution). */
+  agentChanges: AgentChanges = { status: "none" };
+  /** Steering/queued messages OpenCode has accepted but not yet delivered. */
+  pending: PendingInboxItem[] = [];
+  /** Completed agent steps in this session. */
+  steps = 0;
+  readonly budget: BudgetTracker;
+  private patches = new Map<string, { patch: string; status: FileChange["status"] }>();
   private lastStep: { tokens: TokenUsage; modelKey: string | null } | null = null;
   private sessionCost: number | null = null;
+  private contextWarned = false;
+  private lastPayload: PromptPayload | null = null;
+  private deliveredEarly = new Set<string>();
+  private titleCache = new Map<string, string | null>();
+  private firstUserText: string | null = null;
   private readonly normalizer = new EventNormalizer();
   private sessionsTimer: ReturnType<typeof setTimeout> | undefined;
   private changesTimer: ReturnType<typeof setTimeout> | undefined;
   private stopTimer: ReturnType<typeof setTimeout> | undefined;
   private loadToken = 0;
+  private errorSeq = 0;
+  private budgetSeq = 0;
   private disposed = false;
+  /** Controller-generated events (budget/context) raised while applying a batch; flushed after it. */
+  private deferred: UiEvent[] = [];
 
   constructor(
     private readonly client: OpenCodeClient,
@@ -88,13 +140,33 @@ export class SessionController {
     private readonly log: ControllerLog,
     private readonly defaults: () => ControllerDefaults,
     private readonly timing = { debounceMs: 400, stopCheckMs: 15_000, modelRetryMs: 1500 },
-  ) {}
+  ) {
+    this.budget = new BudgetTracker(() => {
+      const d = this.defaults();
+      return (
+        d.budget ?? {
+          presets: {
+            small: { maxCost: 0.1, maxSteps: 20 },
+            medium: { maxCost: 0.3, maxSteps: 50 },
+            large: { maxCost: 1, maxSteps: 120 },
+            custom: { maxCost: 0.5, maxSteps: 80 },
+          },
+          warnAt: 0.8,
+        }
+      );
+    });
+    this.budget.level = this.defaults().budgetLevel ?? "off";
+  }
 
   dispose(): void {
     this.disposed = true;
     clearTimeout(this.sessionsTimer);
     clearTimeout(this.changesTimer);
     clearTimeout(this.stopTimer);
+  }
+
+  private strings(): ControllerStrings {
+    return { ...EN_STRINGS, ...(this.defaults().strings ?? {}) };
   }
 
   usage(contextLimitFallback = true): UsageInfo | null {
@@ -104,6 +176,40 @@ export class SessionController {
     const limit = this.models?.find((m) => m.key === modelKey)?.contextLimit ?? null;
     if (tokens === null && this.sessionCost === null) return null;
     return { contextTokens: tokens, contextLimit: tokens === null ? null : limit, cost: this.sessionCost };
+  }
+
+  budgetView(): BudgetView {
+    return this.budget.view();
+  }
+
+  /** Title shown for the current session (OpenCode's when usable, else a local fallback). */
+  currentTitle(): string | null {
+    if (!this.current) return null;
+    return displayTitle(this.current.title, this.firstUserText ?? this.firstTranscriptUserText());
+  }
+
+  private firstTranscriptUserText(): string | null {
+    const u = this.transcript.items.find((i) => i.kind === "user");
+    return u?.kind === "user" ? u.text : null;
+  }
+
+  /** Session list with cleaned-up titles. Bad titles get a fallback fetched lazily. */
+  displaySessions(): SessionSummary[] {
+    return this.sessions.map((s) => {
+      if (isUsableTitle(s.title)) return s;
+      if (s.id === this.current?.id) return { ...s, title: this.currentTitle() ?? "Untitled session" };
+      if (!this.titleCache.has(s.id)) {
+        this.titleCache.set(s.id, null);
+        this.client
+          .firstUserText(s.id)
+          .then((t) => {
+            this.titleCache.set(s.id, t);
+            this.sink.onStateChanged();
+          })
+          .catch(() => undefined);
+      }
+      return { ...s, title: displayTitle(s.title, this.titleCache.get(s.id)) };
+    });
   }
 
   // ---------------------------------------------------------------- catalog
@@ -116,68 +222,90 @@ export class SessionController {
     this.sessions = [];
     this.models = null;
     this.agents = null;
+    const remembered = this.store.get<BudgetLevel>(this.key("budget"));
+    this.budget.setLevel(remembered ?? this.defaults().budgetLevel ?? "off");
     this.sink.onStateChanged();
     if (!directory) return;
     await Promise.all([this.loadCatalog(), this.refreshSessions()]);
-    const remembered = this.store.get<string>(this.key("session"));
-    if (remembered && this.sessions.some((s) => s.id === remembered)) await this.openSession(remembered);
+    const rememberedSession = this.store.get<string>(this.key("session"));
+    if (rememberedSession && this.sessions.some((s) => s.id === rememberedSession))
+      await this.openSession(rememberedSession);
   }
 
-  private key(kind: "model" | "agent" | "session"): string {
+  private key(kind: "model" | "agent" | "session" | "budget"): string {
     return `opencodeSidebar.${kind}:${this.directory ?? ""}`;
+  }
+
+  private variantKey(modelKey: string): string {
+    return `opencodeSidebar.variant:${this.directory ?? ""}:${modelKey}`;
   }
 
   async loadCatalog(): Promise<void> {
     const dir = this.directory;
     if (!dir) return;
+    let models: ModelOption[] | null;
     try {
-      let models = await this.client.listModels(dir);
-      if (models.length === 0) {
-        // A location that OpenCode has not loaded yet can briefly report no models.
+      models = await this.client.listModels(dir);
+      // A location that OpenCode has not loaded yet briefly reports no models.
+      for (let i = 0; i < 2 && models.length === 0; i++) {
         await delay(this.timing.modelRetryMs);
         models = await this.client.listModels(dir);
       }
-      if (dir !== this.directory) return;
-      this.models = models;
     } catch (e) {
       this.log.error("Loading models failed", e);
-      this.models = null;
+      models = null;
     }
+    let agents: AgentOption[] | null;
     try {
-      const agents = await this.client.listAgents(dir);
-      if (dir !== this.directory) return;
-      this.agents = agents;
+      agents = await this.client.listAgents(dir);
     } catch (e) {
       this.log.error("Loading agents failed", e);
-      this.agents = null;
+      agents = null;
     }
-    await this.pickDefaults();
+    const picked = await this.pickDefaults(dir, models ?? [], agents ?? []);
+    if (dir !== this.directory) return;
+    // Publish the catalog and the defaults together, so a selection made by the user can
+    // never be overwritten by defaults that were still being resolved.
+    this.models = models;
+    this.agents = agents;
+    this.selectedModel = picked.model;
+    this.selectedVariant = this.rememberedVariant(picked.model);
+    this.selectedAgent = picked.agent;
     this.sink.onStateChanged();
   }
 
-  private async pickDefaults(): Promise<void> {
+  private async pickDefaults(
+    dir: string,
+    models: ModelOption[],
+    agents: AgentOption[],
+  ): Promise<{ model: string | null; agent: string | null }> {
     const d = this.defaults();
-    const models = this.models ?? [];
     const has = (k: string | null | undefined): k is string => !!k && models.some((m) => m.key === k);
     let model: string | null = this.store.get<string>(this.key("model")) ?? null;
     if (!has(model)) model = has(d.model) ? d.model : null;
-    if (!model && this.directory) {
+    if (!model) {
       try {
-        const def = await this.client.defaultModel(this.directory);
+        const def = await this.client.defaultModel(dir);
         if (has(def)) model = def;
       } catch {
         // fall through
       }
     }
     if (!model && models.length) model = models[0].key;
-    this.selectedModel = model;
 
-    const agents = this.agents ?? [];
     const hasAgent = (a: string | null | undefined): a is string => !!a && agents.some((x) => x.id === a);
     let agent: string | null = this.store.get<string>(this.key("agent")) ?? null;
     if (!hasAgent(agent))
       agent = hasAgent(d.agent) ? d.agent : hasAgent("build") ? "build" : (agents[0]?.id ?? null);
-    this.selectedAgent = agent;
+    return { model, agent };
+  }
+
+  /** Last valid variant remembered for this workspace + model, or null (model default). */
+  private rememberedVariant(modelKey: string | null): string | null {
+    if (!modelKey) return null;
+    const model = this.models?.find((m) => m.key === modelKey);
+    const v = this.store.get<string>(this.variantKey(modelKey));
+    return v && model?.variants.includes(v) ? v : null;
   }
 
   async refreshSessions(): Promise<void> {
@@ -208,9 +336,17 @@ export class SessionController {
     this.current = null;
     this.busy = false;
     this.stopping = false;
-    this.changes = [];
+    this.agentChanges = { status: "none" };
+    this.patches.clear();
+    this.pending = [];
+    this.steps = 0;
     this.lastStep = null;
     this.sessionCost = null;
+    this.contextWarned = false;
+    this.lastPayload = null;
+    this.firstUserText = null;
+    this.deliveredEarly.clear();
+    this.budget.reset();
     clearTimeout(this.stopTimer);
     this.transcript.reset();
     this.sink.onTranscriptReset([]);
@@ -224,14 +360,16 @@ export class SessionController {
     this.sink.onStateChanged();
   }
 
-  /** Continues an existing OpenCode session: replays history, pending permissions and state. */
+  /** Continues an existing OpenCode session: replays history, pending permissions, forms and queue. */
   async openSession(id: string): Promise<boolean> {
     const token = ++this.loadToken;
     try {
-      const [summary, messages, permissions, active] = await Promise.all([
+      const [summary, messages, permissions, forms, inbox, active] = await Promise.all([
         this.client.getSession(id),
         this.client.listMessages(id, HISTORY_LIMIT),
         this.client.listPermissions(id).catch(() => []),
+        this.client.listForms(id).catch(() => []),
+        this.client.listInbox(id).catch(() => []),
         this.client.activeSessions().catch(() => new Set<string>()),
       ]);
       if (token !== this.loadToken) return false;
@@ -239,7 +377,7 @@ export class SessionController {
       this.current = summary;
       this.sessionCost = summary.cost;
       this.busy = active.has(id);
-      for (const ev of historyToEvents(messages)) this.applyLocal(ev);
+      for (const ev of historyToEvents(messages)) this.applyLocal(ev, true);
       for (const request of permissions) {
         this.applyLocal({
           type: "permission.requested",
@@ -247,8 +385,15 @@ export class SessionController {
           sensitive: describeSensitive(request.resources),
         });
       }
-      if (summary.modelKey && this.models?.some((m) => m.key === summary.modelKey))
+      for (const form of forms) this.applyLocal({ type: "form.requested", form });
+      this.pending = inbox;
+      if (this.busy) this.budget.startTask(this.sessionCost);
+      if (summary.modelKey && this.models?.some((m) => m.key === summary.modelKey)) {
         this.selectedModel = summary.modelKey;
+        const model = this.models.find((m) => m.key === summary.modelKey);
+        this.selectedVariant =
+          summary.variant && model?.variants.includes(summary.variant) ? summary.variant : null;
+      }
       if (summary.agent && this.agents?.some((a) => a.id === summary.agent))
         this.selectedAgent = summary.agent;
       if (this.directory) await this.store.update(this.key("session"), id);
@@ -263,19 +408,46 @@ export class SessionController {
     }
   }
 
+  private modelRef(): { providerID: string; id: string; variant?: string } | undefined {
+    const model = this.models?.find((m) => m.key === this.selectedModel);
+    if (!model) return undefined;
+    return {
+      providerID: model.providerID,
+      id: model.id,
+      ...(this.selectedVariant ? { variant: this.selectedVariant } : {}),
+    };
+  }
+
   async selectModel(key: string): Promise<void> {
     const model = this.models?.find((m) => m.key === key);
     if (!model) return;
     this.selectedModel = key;
+    // Restore this model's last valid variant for the workspace.
+    this.selectedVariant = this.rememberedVariant(key);
     if (this.directory) await this.store.update(this.key("model"), key);
     this.sink.onStateChanged();
-    if (this.current) {
-      try {
-        await this.client.switchModel(this.current.id, { providerID: model.providerID, id: model.id });
-      } catch (e) {
-        this.log.error("Switching model failed", e);
-        this.emit([{ type: "notice", level: "error", text: friendlyError(e, "Model unavailable") }]);
-      }
+    await this.pushModel("Model unavailable");
+  }
+
+  /** Selects a model variant (null = model default). Only variants OpenCode lists are accepted. */
+  async selectVariant(variant: string | null): Promise<void> {
+    const model = this.models?.find((m) => m.key === this.selectedModel);
+    if (!model) return;
+    if (variant !== null && !model.variants.includes(variant)) return;
+    this.selectedVariant = variant;
+    if (this.directory) await this.store.update(this.variantKey(model.key), variant ?? undefined);
+    this.sink.onStateChanged();
+    await this.pushModel("Could not switch the model variant");
+  }
+
+  private async pushModel(failure: string): Promise<void> {
+    const ref = this.modelRef();
+    if (!this.current || !ref) return;
+    try {
+      await this.client.switchModel(this.current.id, ref);
+    } catch (e) {
+      this.log.error("Switching model failed", e);
+      this.emit([{ type: "notice", level: "error", text: friendlyError(e, failure) }]);
     }
   }
 
@@ -294,15 +466,36 @@ export class SessionController {
     }
   }
 
+  async selectBudget(level: BudgetLevel): Promise<void> {
+    this.budget.setLevel(level);
+    if (this.directory) await this.store.update(this.key("budget"), level);
+    this.sink.onStateChanged();
+    this.checkBudget(this.budget.evaluate());
+    this.flushDeferred();
+  }
+
+  private flushDeferred(): void {
+    const d = this.deferred.splice(0);
+    if (d.length) this.emit(d);
+  }
+
   // ---------------------------------------------------------------- prompts
 
-  /** Sends a prompt. Returns false when nothing was sent (caller may restore the input). */
-  async send(text: string, attachments: readonly ContextAttachment[]): Promise<boolean> {
+  /**
+   * Sends a prompt. While the agent is running, `delivery` decides how OpenCode
+   * handles it: "steer" (injected at the next step) or "queue" (after the task).
+   * Returns false when nothing was sent (caller may restore the input).
+   */
+  async send(
+    text: string,
+    attachments: readonly ContextAttachment[],
+    delivery?: InboxDelivery,
+  ): Promise<boolean> {
     if (!this.directory) {
       this.emit([{ type: "notice", level: "error", text: "Open a folder to start an OpenCode session." }]);
       return false;
     }
-    if (this.busy) return false;
+    if (this.busy && (!delivery || !this.current)) return false;
     const payload = buildPrompt(text, attachments);
     if (!payload.text) {
       if (payload.files.length) {
@@ -312,39 +505,87 @@ export class SessionController {
       }
       return false;
     }
+    return this.dispatch(payload, this.busy ? delivery : undefined);
+  }
 
-    this.busy = true;
-    this.sink.onStateChanged();
+  private async dispatch(payload: PromptPayload, delivery?: InboxDelivery): Promise<boolean> {
+    const wasBusy = this.busy;
+    if (!wasBusy) {
+      this.busy = true;
+      this.sink.onStateChanged();
+    }
     try {
       if (!this.current) {
-        const model = this.models?.find((m) => m.key === this.selectedModel);
         const created = await this.client.createSession({
-          directory: this.directory,
+          directory: this.directory!,
           agent: this.selectedAgent ?? undefined,
-          model: model ? { providerID: model.providerID, id: model.id } : undefined,
+          model: this.modelRef(),
         });
         this.current = created;
+        this.sessionCost = created.cost ?? 0;
         this.loadToken++;
         await this.store.update(this.key("session"), created.id);
         this.log.info(`Created session ${created.id}`);
         this.scheduleSessionsRefresh();
       }
-      const res = await this.client.prompt(this.current.id, payload);
+      const res = await this.client.prompt(this.current.id, {
+        ...payload,
+        ...(delivery ? { delivery } : {}),
+      });
+      this.lastPayload = payload;
       this.log.info(
-        `Prompt sent to ${this.current.id} (${payload.text.length} chars, ${payload.files.length} file attachment(s))`,
+        `Prompt sent to ${this.current.id} (${payload.text.length} chars, ${payload.files.length} file attachment(s)${delivery ? `, ${delivery}` : ""})`,
       );
-      // The server echoes the message as session.inbox.enqueued; this covers a missed event.
-      if (res.id && !this.transcript.has(`user:${res.id}`)) {
-        const ev = historyToEvents([{ type: "user", id: res.id, text: payload.text, files: payload.files }]);
-        this.emit(ev);
+      // The server echoes the message as session.inbox.enqueued/delivered; this covers missed events.
+      if (res.id && !this.transcript.has(`user:${res.id}`) && !this.pending.some((p) => p.id === res.id)) {
+        const [ev] = historyToEvents([
+          { type: "user", id: res.id, text: payload.text, files: payload.files },
+        ]);
+        if (ev?.type === "user.message") {
+          if (this.deliveredEarly.has(res.id) || !wasBusy) this.emit([ev]);
+          else
+            this.emit([
+              {
+                type: "inbox.enqueued",
+                id: ev.id,
+                text: ev.text,
+                attachments: ev.attachments,
+                delivery: delivery ?? "steer",
+              },
+            ]);
+        }
       }
       return true;
     } catch (e) {
-      this.busy = false;
+      if (!wasBusy) this.busy = false;
       this.log.error("Sending prompt failed", e);
       this.emit([{ type: "notice", level: "error", text: friendlyError(e, "Session failed") }]);
       this.sink.onStateChanged();
       return false;
+    }
+  }
+
+  /** Re-sends the last prompt after a failure (explicit user action). */
+  async retry(): Promise<boolean> {
+    if (this.busy || !this.lastPayload || !this.directory) return false;
+    return this.dispatch(this.lastPayload);
+  }
+
+  /** Removes a pending steering/queued message before OpenCode delivers it. Returns its text. */
+  async cancelPending(id: string): Promise<string | null> {
+    const item = this.pending.find((p) => p.id === id);
+    if (!this.current || !item) return null;
+    try {
+      await this.client.cancelInbox(this.current.id, id);
+      this.applyInbox({ type: "inbox.cancelled", id });
+      this.sink.onStateChanged();
+      return item.text;
+    } catch (e) {
+      this.log.warn(`Cancelling queued message failed: ${e instanceof Error ? e.message : String(e)}`);
+      this.emit([
+        { type: "notice", level: "info", text: "That message was already delivered to the agent." },
+      ]);
+      return null;
     }
   }
 
@@ -360,6 +601,7 @@ export class SessionController {
       if (!interrupted) {
         this.busy = false;
         this.stopping = false;
+        this.budget.endTask();
         this.sink.onStateChanged();
         return;
       }
@@ -380,6 +622,7 @@ export class SessionController {
       if (!active.has(id)) {
         this.busy = false;
         this.stopping = false;
+        this.budget.endTask();
         this.sink.onStateChanged();
       }
     } catch {
@@ -417,6 +660,103 @@ export class SessionController {
     }
   }
 
+  // ------------------------------------------------------------------ forms
+
+  /** Validates and submits an answer to an OpenCode form/question. Returns an error message on failure. */
+  async answerForm(formId: string, answer: FormAnswer): Promise<string | null> {
+    const item = this.transcript.get(`form:${formId}`);
+    if (!this.current || item?.kind !== "form" || item.status !== "pending")
+      return "This question is no longer pending.";
+    const checked = validateAnswer(item.form, answer);
+    if (!checked.ok) return checked.error;
+    this.emit([{ type: "form.sending", formId }]);
+    try {
+      await this.client.replyForm(item.form.sessionID, formId, checked.answer);
+      this.log.info(`Form ${formId} answered (${Object.keys(checked.answer).length} field(s))`);
+      this.emit([{ type: "form.resolved", formId, status: "answered", answer: checked.answer }]);
+      return null;
+    } catch (e) {
+      if (e instanceof OpenCodeHttpError && e.status === 404) {
+        this.emit([
+          { type: "form.resolved", formId, status: "expired", answer: null },
+          { type: "notice", level: "info", text: "This question expired before it was answered." },
+        ]);
+        return null;
+      }
+      this.log.error("Form reply failed", e);
+      this.emit([{ type: "form.resolved", formId, status: "pending", answer: null }]);
+      return friendlyError(e, "Could not send the answer");
+    }
+  }
+
+  async cancelForm(formId: string): Promise<void> {
+    const item = this.transcript.get(`form:${formId}`);
+    if (!this.current || item?.kind !== "form" || item.status !== "pending") return;
+    this.emit([{ type: "form.sending", formId }]);
+    try {
+      await this.client.cancelForm(item.form.sessionID, formId);
+      this.emit([{ type: "form.resolved", formId, status: "cancelled", answer: null }]);
+    } catch (e) {
+      const expired = e instanceof OpenCodeHttpError && e.status === 404;
+      if (!expired) this.log.error("Form cancel failed", e);
+      this.emit([{ type: "form.resolved", formId, status: expired ? "expired" : "pending", answer: null }]);
+    }
+  }
+
+  // ----------------------------------------------------------------- budget
+
+  /** "Continue once": one explicit override for the current task; the workspace budget is unchanged. */
+  async budgetContinueOnce(budgetItemId: string): Promise<boolean> {
+    if (this.busy || !this.current) return false;
+    this.budget.continueOnce();
+    this.emit([{ type: "budget.resolved", id: budgetItemId, resolution: "continued" }]);
+    this.log.info("Budget: continue once (one-time override)");
+    return this.dispatch({ text: "Continue the previous task from where you stopped.", files: [] });
+  }
+
+  /** Raises the workspace budget one level and continues the task. */
+  async budgetIncrease(budgetItemId: string): Promise<boolean> {
+    if (this.busy || !this.current) return false;
+    const level = nextLevel(this.budget.level);
+    if (level === this.budget.level) {
+      // Already at the largest preset: behaves like one override.
+      return this.budgetContinueOnce(budgetItemId);
+    }
+    this.budget.increaseTo(level);
+    if (this.directory) await this.store.update(this.key("budget"), level);
+    this.emit([{ type: "budget.resolved", id: budgetItemId, resolution: "increased" }]);
+    this.log.info(`Budget increased to ${level}`);
+    return this.dispatch({ text: "Continue the previous task from where you stopped.", files: [] });
+  }
+
+  async budgetNewSession(budgetItemId: string): Promise<void> {
+    this.emit([{ type: "budget.resolved", id: budgetItemId, resolution: "new-session" }]);
+    await this.newSession();
+  }
+
+  private checkBudget(signal: ReturnType<BudgetTracker["evaluate"]>): void {
+    if (signal.kind === "warning") {
+      this.deferred.push({
+        type: "budget",
+        id: `budget:${++this.budgetSeq}`,
+        state: "warning",
+        text: this.strings().budgetWarning,
+      });
+    } else if (signal.kind === "exceeded") {
+      const v = this.budget.view();
+      this.log.warn(
+        `Budget ${v.level} reached (${signal.metric}): cost=${v.taskCost ?? "n/a"} steps=${v.taskSteps}; interrupting`,
+      );
+      this.deferred.push({
+        type: "budget",
+        id: `budget:${++this.budgetSeq}`,
+        state: "stopped",
+        text: this.strings().budgetStopped,
+      });
+      if (this.busy && !this.stopping) void this.stop();
+    }
+  }
+
   // ----------------------------------------------------------------- events
 
   /** Entry point for every raw event from the OpenCode event stream. */
@@ -436,42 +776,151 @@ export class SessionController {
     else await this.refreshSessions();
   }
 
-  private applyLocal(ev: UiEvent): void {
+  /** Inbox bookkeeping; returns the events to forward to the transcript. */
+  private applyInbox(ev: Extract<UiEvent, { type: `inbox.${string}` }>): UiEvent[] {
+    switch (ev.type) {
+      case "inbox.enqueued":
+        if (this.transcript.has(`user:${ev.id}`)) return [];
+        if (this.deliveredEarly.delete(ev.id)) {
+          return [{ type: "user.message", id: ev.id, text: ev.text, attachments: ev.attachments }];
+        }
+        if (!this.pending.some((p) => p.id === ev.id)) {
+          this.pending = [
+            ...this.pending,
+            { id: ev.id, text: ev.text, attachments: ev.attachments, delivery: ev.delivery },
+          ];
+        }
+        return [];
+      case "inbox.delivered": {
+        const item = this.pending.find((p) => p.id === ev.id);
+        this.pending = this.pending.filter((p) => p.id !== ev.id);
+        if (!item) {
+          this.deliveredEarly.add(ev.id);
+          return [];
+        }
+        return [{ type: "user.message", id: item.id, text: item.text, attachments: item.attachments }];
+      }
+      case "inbox.cancelled":
+        this.pending = this.pending.filter((p) => p.id !== ev.id);
+        return [];
+      case "inbox.delivery":
+        this.pending = this.pending.map((p) => (p.id === ev.id ? { ...p, delivery: ev.delivery } : p));
+        return [];
+    }
+  }
+
+  private applyLocal(ev: UiEvent, replay = false): UiEvent[] {
+    const out: UiEvent[] = [ev];
     switch (ev.type) {
       case "session.busy":
         this.busy = true;
+        this.budget.startTask(this.sessionCost ?? 0);
         break;
       case "session.idle":
         this.busy = false;
         this.stopping = false;
+        this.budget.endTask();
         clearTimeout(this.stopTimer);
         break;
       case "session.renamed":
         if (this.current) this.current = { ...this.current, title: ev.title };
         break;
+      case "user.message":
+        if (this.firstUserText === null) this.firstUserText = ev.text;
+        break;
       case "usage.step":
         this.lastStep = { tokens: ev.tokens, modelKey: ev.modelKey };
+        this.steps++;
+        if (!replay) {
+          this.checkBudget(this.budget.recordStep());
+          this.checkContext();
+        }
         break;
       case "usage.session":
         this.sessionCost = ev.cost;
+        if (!replay) this.checkBudget(this.budget.recordCost(ev.cost));
+        break;
+      case "session.error": {
+        const model = this.models?.find((m) => m.key === ev.modelKey);
+        const raw = ev.error ?? { type: "unknown", message: ev.message, status: null, body: null };
+        const friendly = classifyError(raw, {
+          modelName: model?.name ?? null,
+          providerName: model?.providerName ?? null,
+        });
+        if (!replay) {
+          this.log.error(
+            `OpenCode run failed: ${describeForLog(raw, { providerID: model?.providerID ?? ev.modelKey?.split("/")[0] ?? null, modelKey: ev.modelKey })}`,
+          );
+        }
+        const actions = friendly.actions.filter(
+          (a) => a !== "retry" || (!replay && this.lastPayload !== null),
+        );
+        const replaced: UiEvent = {
+          type: "error",
+          id: `error:${++this.errorSeq}`,
+          title: friendly.title,
+          detail: friendly.detail,
+          actions,
+        };
+        out[0] = replaced;
+        break;
+      }
+      case "inbox.enqueued":
+      case "inbox.delivered":
+      case "inbox.cancelled":
+      case "inbox.delivery": {
+        const forwarded = this.applyInbox(ev);
+        for (const f of forwarded)
+          if (f.type === "user.message" && this.firstUserText === null) this.firstUserText = f.text;
+        out.splice(0, 1, ...forwarded);
+        break;
+      }
+      case "form.resolved":
+        if (ev.status === "answered" && ev.answer) {
+          const item = this.transcript.get(`form:${ev.formId}`);
+          if (item?.kind === "form")
+            this.log.info(`Form answered: ${summarizeAnswer(item.form, ev.answer).length} chars`);
+        }
         break;
       default:
         break;
     }
-    this.transcript.apply(ev);
+    for (const e of out) this.transcript.apply(e);
+    return out;
+  }
+
+  private checkContext(): void {
+    const pct = this.defaults().contextWarnPercent ?? 80;
+    const u = this.usage();
+    if (!pct || this.contextWarned || !u?.contextTokens || !u.contextLimit) return;
+    const used = Math.round((u.contextTokens / u.contextLimit) * 100);
+    if (used >= pct) {
+      this.contextWarned = true;
+      this.deferred.push({ type: "notice", level: "info", text: this.strings().contextWarning(used) });
+    }
   }
 
   private emit(events: UiEvent[]): void {
     let stateChanged = false;
     let changesDirty = false;
+    const forwarded: UiEvent[] = [];
     for (const ev of events) {
-      if (/^(session\.|usage\.)/.test(ev.type)) stateChanged = true;
+      if (/^(session\.|usage\.|inbox\.|budget)/.test(ev.type)) stateChanged = true;
       if (ev.type === "files.changed" || ev.type === "session.idle") changesDirty = true;
-      this.applyLocal(ev);
+      forwarded.push(...this.applyLocal(ev));
     }
-    this.sink.onEvents(events);
+    if (forwarded.length) this.sink.onEvents(forwarded);
     if (stateChanged) this.sink.onStateChanged();
     if (changesDirty) this.scheduleChangesRefresh();
+    this.flushDeferred();
+  }
+
+  /** Canonical Markdown of an assistant message (for Copy), or null when not copyable yet. */
+  copyText(itemId: string): string | null {
+    const item = this.transcript.get(itemId);
+    if (item?.kind !== "assistant") return null;
+    if (item.streaming && this.busy) return null;
+    return item.text;
   }
 
   // ---------------------------------------------------------------- changes
@@ -481,22 +930,75 @@ export class SessionController {
     this.changesTimer = setTimeout(() => void this.refreshChanges(), this.timing.debounceMs);
   }
 
+  /** User message ids of the loaded session, oldest first. */
+  private userMessageIds(): string[] {
+    return this.transcript.items.filter((i) => i.kind === "user").map((i) => i.id.slice("user:".length));
+  }
+
+  /** Files the agent reported editing (edit-tool metadata) in this session. */
+  private reportedEdits(): Set<string> {
+    const out = new Set<string>();
+    for (const i of this.transcript.items) {
+      if (i.kind === "tool") for (const f of i.detail.files) out.add(f.path);
+      if (i.kind === "turn-summary") for (const f of i.files) out.add(f.path);
+    }
+    return out;
+  }
+
+  /**
+   * Loads the agent's changes for the whole session from OpenCode's snapshots
+   * (first user turn → last user turn, full-file patches). If the attribution is
+   * not reliable, reports "unavailable" instead of guessing.
+   */
   async refreshChanges(): Promise<void> {
     const id = this.current?.id;
     if (!id) return;
+    const users = this.userMessageIds();
+    const range = users.length
+      ? { from: users[0], to: users.length > 1 ? users[users.length - 1] : undefined, full: true }
+      : { full: true };
     try {
-      const diff = await this.client.sessionDiff(id);
+      const diff = await this.client.sessionDiff(id, range);
       if (this.current?.id !== id) return;
-      this.changes = diff.map((d) => ({
+      this.patches.clear();
+      for (const d of diff) this.patches.set(d.file, { patch: d.patch, status: d.status });
+      const files = diff.map((d) => ({
         path: d.file,
         additions: d.additions,
         deletions: d.deletions,
         status: d.status,
       }));
+      const reported = this.reportedEdits();
+      if (files.length === 0 && reported.size > 0) {
+        this.agentChanges = {
+          status: "unavailable",
+          reason: "OpenCode did not record snapshots for the agent's edits.",
+        };
+      } else {
+        this.agentChanges = files.length ? { status: "ok", files } : { status: "none" };
+      }
       this.sink.onStateChanged();
     } catch (e) {
       this.log.warn(`Session diff unavailable: ${e instanceof Error ? e.message : String(e)}`);
+      if (this.current?.id !== id) return;
+      this.agentChanges = {
+        status: "unavailable",
+        reason: "OpenCode could not provide the session's snapshot diff.",
+      };
+      this.sink.onStateChanged();
     }
+  }
+
+  /** Before/after contents of one agent-changed file, or null when they cannot be reconstructed reliably. */
+  agentFileSides(path: string): FileSides | null {
+    const p = this.patches.get(path);
+    if (!p) return null;
+    return reconstructSides(p.patch, p.status);
+  }
+
+  /** Back-compat for v0.1 callers: agent-attributed files (empty when unavailable). */
+  get changes(): FileChange[] {
+    return this.agentChanges.status === "ok" ? this.agentChanges.files : [];
   }
 }
 
