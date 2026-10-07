@@ -10,7 +10,7 @@ describe("extension manifest", () => {
   it("keeps the release identity", () => {
     assert.deepEqual(
       [pkg.name, pkg.publisher, pkg.displayName, pkg.version],
-      ["opencode-sidebar", "GlobalWebSolutions", "OpenCode Chat Sidebar", "0.2.2"],
+      ["opencode-chat-sidebar", "GlobalWebSolutions", "OpenCode Chat Sidebar", "0.2.3"],
     );
   });
 

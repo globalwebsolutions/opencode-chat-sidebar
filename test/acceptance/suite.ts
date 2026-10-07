@@ -238,7 +238,7 @@ async function realRepo(api: TestApi): Promise<void> {
   );
   check(
     "Answer after approval",
-    lastAssistantText(api).includes("opencode-sidebar"),
+    lastAssistantText(api).includes("opencode-chat-sidebar"),
     lastAssistantText(api).slice(0, 120),
   );
 
@@ -1083,7 +1083,7 @@ async function worktree(api: TestApi): Promise<void> {
 }
 
 export async function run(): Promise<void> {
-  const ext = vscode.extensions.all.find((e) => e.packageJSON?.name === "opencode-sidebar");
+  const ext = vscode.extensions.all.find((e) => e.packageJSON?.name === "opencode-chat-sidebar");
   if (!ext) throw new Error("extension not found");
   const exports = (await ext.activate()) as { testApi: TestApi };
   const api = exports.testApi;

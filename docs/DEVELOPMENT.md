@@ -19,7 +19,7 @@ Press **F5** in VS Code with a launch configuration of type `extensionHost` poin
 | `npm run format:check`    | Prettier                                                                  |
 | `npm test`                | Unit tests (`node:test`) compiled to `out-test/`                          |
 | `npm run test:acceptance` | End-to-end scenarios in a real VS Code against the local OpenCode service |
-| `npm run package`         | Builds `dist-vsix/opencode-sidebar-<version>.vsix` (never publishes)      |
+| `npm run package`         | Builds `dist-vsix/opencode-chat-sidebar-<version>.vsix` (never publishes) |
 
 ## Unit tests
 

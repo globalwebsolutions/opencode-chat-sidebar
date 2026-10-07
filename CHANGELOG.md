@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3
+
+Packaging-only release. No functional changes.
+
+- Marketplace package name changed to **`opencode-chat-sidebar`** because `opencode-sidebar` is already taken on the Visual Studio Marketplace. The extension ID is now **`GlobalWebSolutions.opencode-chat-sidebar`**, and the VSIX is `opencode-chat-sidebar-0.2.3.vsix`.
+- Display name, publisher, commands, settings keys (`opencodeSidebar.*`), view IDs, repository URLs and license are unchanged.
+- 0.2.2 (`GlobalWebSolutions.opencode-sidebar`) is superseded by this release; it was never published to the Marketplace.
+
 ## 0.2.2
 
 Packaging-only release. No functional changes.
