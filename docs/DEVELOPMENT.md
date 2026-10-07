@@ -71,7 +71,7 @@ Scenarios use real model calls, so they cost a small number of tokens with your 
 
 ## Packaging
 
-`npm run package` runs the production build and `vsce package --allow-missing-repository` (the flag goes once a public repository URL exists). `.vscodeignore` ships only the two bundles, the CSS and icons, `README.md`, `CHANGELOG.md`, `LICENSE`, `SECURITY.md` and `package.json`. Nothing is published. The publisher is `globalwebsolutions`; uploading is a manual step (see `docs/marketplace/MARKETPLACE.md`).
+`npm run package` runs the production build and `vsce package`, using the repository metadata in `package.json`. `.vscodeignore` ships only the two bundles, the CSS and icons, `README.md`, `CHANGELOG.md`, `LICENSE`, `SECURITY.md` and `package.json`. Nothing is published. The publisher is `globalwebsolutions`; uploading is a manual step (see `docs/marketplace/MARKETPLACE.md`).
 
 ## Project layout
 

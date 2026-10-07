@@ -2,16 +2,28 @@
 
 ## 0.2.1
 
-Marketplace readiness release, plus a small usability addition.
+**First public release of OpenCode Chat Sidebar**, an unofficial VS Code chat interface for OpenCode agents. Source: https://github.com/globalwebsolutions/opencode-chat-sidebar
 
-- New display name: **OpenCode Chat Sidebar** (extension identifier `globalwebsolutions.opencode-sidebar`; setting keys and command IDs unchanged).
-- Marketplace metadata: publisher, description, categories, keywords and MIT license.
-- Rewritten README for the Marketplace, with an unofficial-extension disclaimer and Privacy section; new SECURITY.md.
-- User-facing labels (command category, settings title, output channel) now read "OpenCode Chat Sidebar".
-- Packaging validated: lean VSIX with no tests, sources or development files.
-- **Current Task** bar under the session title shows the prompt the agent is working on (summary derived locally, no model call). Expand it for the full prompt and **Copy Prompt** (exact original text). It also shows Running / Waiting for you / Completed / Stopped / Stopped — budget reached / Failed, the latest steer, and the next queued message (+N queued). Steering and Continue once keep the task; reopening a session restores it from OpenCode messages.
-- Native **notifications** for task completed, needs input, failed and Budget Guard stop, each with **Open Chat**. Completion is suppressed while you're watching the chat; settings `opencodeSidebar.notifications.*` turn each type off.
-- Fix (found during release validation): a Git status refresh while models were still loading reloaded the catalog and could reset the selected model to OpenCode's default. Branch and Git status updates no longer reload the catalog; only switching to a different folder does.
+Highlights (including everything developed in 0.1.0 and 0.2.0):
+
+- **Chat and sessions**: streaming chat with Markdown, new and recent sessions from OpenCode, models grouped by provider, model variants (such as reasoning effort) when OpenCode lists them, and agent selection.
+- **Current Task** bar under the session title. It shows the prompt the agent is working on (summarized locally, no model call), its status (Running, Waiting for you, Completed, Stopped, Stopped — budget reached, Failed), the latest steer and the next queued message. Expand it for the full prompt and **Copy Prompt** to copy the exact original text.
+- **Copy** the full assistant response (exact stored Markdown) and **Copy code** per code block.
+- **Notifications** (VS Code native) when a task completes, needs input, fails or is stopped by Budget Guard, with **Open Chat**. Settings: `opencodeSidebar.notifications.*`.
+- **Budget Guard** (Off / Small / Medium / Large / Custom): a local per-task limit on cost and steps reported by OpenCode, with a warning near the limit, a real stop at the limit, and Continue once / Increase budget / Start new session.
+- **Questions and forms** from OpenCode answered in the sidebar.
+- **Steer** a running task or **Queue** the next instruction, with Edit / Remove for pending messages.
+- **Agent changes** from OpenCode session snapshots kept separate from **Workspace changes**, both in VS Code's native diff editor.
+- Tool activity, permission prompts with sensitive-path warnings, context / cost / step figures, Git branch and worktree awareness, and readable provider errors.
+- Explicit context only: current file, selected lines, or files you pick.
+
+Release and packaging:
+
+- Display name **OpenCode Chat Sidebar**, publisher `globalwebsolutions`, extension ID `globalwebsolutions.opencode-sidebar`, MIT license.
+- Public repository, issue tracker and private vulnerability reporting on GitHub; README screenshots; SECURITY.md.
+- All settings use the `opencodeSidebar.*` namespace.
+- Lean VSIX: runtime bundles, CSS, icons, README, CHANGELOG, LICENSE and SECURITY only.
+- Fix (found during release validation): a Git status refresh while models were still loading could reset the selected model to OpenCode's default. Branch and Git status updates no longer reload the model catalog.
 
 Releases 0.1.0 and 0.2.0 below were local, unpublished builds under the working name "OpenCode Sidebar".
 

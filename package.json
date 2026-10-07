@@ -6,6 +6,14 @@
   "publisher": "globalwebsolutions",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/globalwebsolutions/opencode-chat-sidebar.git"
+  },
+  "homepage": "https://github.com/globalwebsolutions/opencode-chat-sidebar#readme",
+  "bugs": {
+    "url": "https://github.com/globalwebsolutions/opencode-chat-sidebar/issues"
+  },
   "pricing": "Free",
   "icon": "media/icon.png",
   "galleryBanner": {
@@ -290,7 +298,7 @@
     "pretest": "tsc -p tsconfig.test.json",
     "test": "node --test --test-reporter=spec \"out-test/test/*.test.js\"",
     "test:acceptance": "npm run build && tsc -p tsconfig.test.json && node out-test/test/acceptance/runAcceptance.js",
-    "package": "node -e \"require('fs').mkdirSync('dist-vsix',{recursive:true})\" && vsce package --allow-missing-repository --out dist-vsix/",
+    "package": "node -e \"require('fs').mkdirSync('dist-vsix',{recursive:true})\" && vsce package --out dist-vsix/",
     "vscode:prepublish": "npm run build",
     "test:webview": "npm run build && tsc -p tsconfig.test.json && node --test --test-reporter=spec \"out-test/test/webview/*.test.js\""
   },

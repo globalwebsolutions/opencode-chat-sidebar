@@ -39,4 +39,8 @@ The extension declares `untrustedWorkspaces: { supported: false }`, so it is dis
 
 ## Reporting a vulnerability
 
-There is no dedicated security contact yet. Please use the **Q & A** tab of this extension's Visual Studio Marketplace page, and don't include exploit details or secrets in public posts. This section will be updated once a public repository with private vulnerability reporting is available.
+Please report vulnerabilities privately through GitHub's private vulnerability reporting:
+
+https://github.com/globalwebsolutions/opencode-chat-sidebar/security/advisories/new
+
+Please do not open a public issue for security problems, and never include secrets or credentials in reports. For everything else, use the issue tracker: https://github.com/globalwebsolutions/opencode-chat-sidebar/issues

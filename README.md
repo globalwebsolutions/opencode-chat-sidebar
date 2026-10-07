@@ -8,6 +8,8 @@ OpenCode Chat Sidebar is a VS Code chat interface for the [OpenCode](https://ope
 
 This extension is **not** a coding model, an AI provider, a hosted service or a replacement for OpenCode, and it does not give you model access. You use whatever providers you have configured in OpenCode.
 
+<p align="center"><img src="https://raw.githubusercontent.com/globalwebsolutions/opencode-chat-sidebar/v0.2.1/docs/marketplace/screenshots/1-chat.png" alt="OpenCode Chat Sidebar: chat beside the editor with model, variant, agent and Budget Guard selectors, the Current Task bar, tool activity, and Copy / Copy code" width="400"></p>
+
 ## Why
 
 OpenCode is usually driven from its terminal UI, desktop app or API. This extension puts it in a sidebar beside your editor. You can chat with the agent, attach exactly the code you mean, watch what it does, answer its questions and permission requests, and review its changes in VS Code's own diff editor without leaving your code.
@@ -43,6 +45,12 @@ OpenCode is usually driven from its terminal UI, desktop app or API. This extens
 - **Copy** the full assistant response, and **Copy code** for individual code blocks.
 - **Agent changes** (what this OpenCode session changed) kept separate from **Workspace changes** (HEAD ↔ working tree), both in VS Code's native diff editor.
 - Readable messages for provider and model problems (for example insufficient funds, rate limits, unknown model), with **Change model** and **Retry**.
+
+## Screenshots
+
+|                                                                                                                    Budget Guard                                                                                                                    |                                                                                                                  Agent changes                                                                                                                  |                                                                                                               Questions, steer and queue                                                                                                               |
+| :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+| <img src="https://raw.githubusercontent.com/globalwebsolutions/opencode-chat-sidebar/v0.2.1/docs/marketplace/screenshots/2-budget.png" alt="Budget Guard stopped the task, with Continue once, Increase budget and Start new session" width="260"> | <img src="https://raw.githubusercontent.com/globalwebsolutions/opencode-chat-sidebar/v0.2.1/docs/marketplace/screenshots/3-agent-changes.png" alt="Agent changes from OpenCode session snapshots, separate from workspace changes" width="260"> | <img src="https://raw.githubusercontent.com/globalwebsolutions/opencode-chat-sidebar/v0.2.1/docs/marketplace/screenshots/4-question-steer.png" alt="A question card, the latest steer and the next queued message under the Current Task" width="260"> |
 
 ## Requirements
 
@@ -198,7 +206,7 @@ The extension adds no default keyboard shortcuts. You can bind these commands in
 
 ## Security
 
-The extension connects only to loopback addresses unless you explicitly allow a remote server, and never auto-approves permissions. It warns about sensitive paths, redacts diagnostics and requires a trusted workspace. Details are in `SECURITY.md`, included with the extension.
+The extension connects only to loopback addresses unless you explicitly allow a remote server, and never auto-approves permissions. It warns about sensitive paths, redacts diagnostics and requires a trusted workspace. Details are in [SECURITY.md](https://github.com/globalwebsolutions/opencode-chat-sidebar/blob/main/SECURITY.md).
 
 ## Known limitations
 
@@ -210,4 +218,6 @@ The extension connects only to loopback addresses unless you explicitly allow a 
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [LICENSE](https://github.com/globalwebsolutions/opencode-chat-sidebar/blob/main/LICENSE).
+
+Source code, issues and releases: https://github.com/globalwebsolutions/opencode-chat-sidebar
