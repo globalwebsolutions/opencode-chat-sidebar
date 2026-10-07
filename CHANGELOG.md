@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+Packaging-only release. No functional changes.
+
+- Marketplace publisher ID corrected to **`GlobalWebSolutions`** (exact casing of the registered publisher). The extension ID is now `GlobalWebSolutions.opencode-sidebar`. Name, display name, commands, settings keys, view IDs and repository URLs are unchanged.
+- 0.2.1 was packaged with the publisher `globalwebsolutions` and is superseded by this release; it was never published to the Marketplace.
+
 ## 0.2.1
 
 **First public release of OpenCode Chat Sidebar**, an unofficial VS Code chat interface for OpenCode agents. Source: https://github.com/globalwebsolutions/opencode-chat-sidebar

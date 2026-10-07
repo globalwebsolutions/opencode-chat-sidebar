@@ -4,13 +4,13 @@ This folder is not shipped in the VSIX.
 
 ## Identity
 
-| Field        | Value                                                     |
-| ------------ | --------------------------------------------------------- |
-| Display name | OpenCode Chat Sidebar                                     |
-| Publisher ID | `globalwebsolutions` (display name: Global Web Solutions) |
-| Package name | `opencode-sidebar`, unchanged since 0.1.0                 |
-| Identifier   | `globalwebsolutions.opencode-sidebar`                     |
-| License      | MIT                                                       |
+| Field        | Value                                                                     |
+| ------------ | ------------------------------------------------------------------------- |
+| Display name | OpenCode Chat Sidebar                                                     |
+| Publisher ID | `GlobalWebSolutions` (display name: Global Web Solutions; case-sensitive) |
+| Package name | `opencode-sidebar`, unchanged since 0.1.0                                 |
+| Identifier   | `GlobalWebSolutions.opencode-sidebar`                                     |
+| License      | MIT                                                                       |
 
 Do not rename `name` or `publisher` after the first upload: together they form the extension ID that installs and updates track. Setting keys (`opencodeSidebar.*`), command IDs and the view ID are part of users' saved state and must stay stable too.
 
@@ -41,8 +41,8 @@ They are referenced from README.md with URLs pinned to the `v0.2.1` tag (https:/
 
 ## Manual upload steps (not automated)
 
-1. Sign in at https://marketplace.visualstudio.com/manage and confirm the publisher `globalwebsolutions` exists and is owned by you.
-2. Build: `npm ci && npm run package` → `dist-vsix/opencode-sidebar-0.2.1.vsix` (also attached to the GitHub release v0.2.1). Upload this file.
+1. Sign in at https://marketplace.visualstudio.com/manage and confirm the publisher `GlobalWebSolutions` exists and is owned by you.
+2. Build: `npm ci && npm run package` → `dist-vsix/opencode-sidebar-0.2.2.vsix` (also attached to the GitHub release v0.2.2). Upload this file.
 3. Upload with **New extension → Visual Studio Code** in the web portal and choose the `.vsix` file. This needs no personal access token. (Alternatively `vsce publish --packagePath <file>` with a PAT you create yourself; this project never creates one.)
 4. Check the listing: name, icon, README rendering, categories (AI, Chat, Other), license.
 5. Install from the Marketplace in a clean VS Code profile and run the smoke test (connect, models, agents, one prompt, Copy, Stop).
