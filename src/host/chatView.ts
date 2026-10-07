@@ -63,7 +63,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.disposables.push(this.workspace);
     this.disposables.push(
       this.workspace.onDidChange((info) => {
-        void this.controller?.setDirectory(info.active?.path ?? null);
+        // Branch / Git status updates also fire this event; only a different folder reloads.
+        const dir = info.active?.path ?? null;
+        if (this.controller && this.controller.directory !== dir) void this.controller.setDirectory(dir);
         this.postState();
       }),
     );
@@ -335,7 +337,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.log.error(`opencode service start failed: ${result.output}`);
         this.setConnection({
           kind: "error",
-          message: "Could not start OpenCode. See the OpenCode Sidebar output for details.",
+          message: "Could not start OpenCode. See the OpenCode Chat Sidebar output for details.",
         });
         return;
       }

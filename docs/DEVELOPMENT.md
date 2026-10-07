@@ -65,9 +65,13 @@ The real-repository scenario is read-only by construction: it uses OpenCode's `p
 
 Scenarios use real model calls, so they cost a small number of tokens with your configured provider.
 
+## Marketplace screenshots
+
+`node scripts/screenshots.mjs` (after `npm run build`) renders the screenshots in `docs/marketplace/screenshots/` from the real webview bundle with generic demo data. See `docs/marketplace/MARKETPLACE.md`.
+
 ## Packaging
 
-`npm run package` runs the production build and `vsce package --skip-license --allow-missing-repository`. `.vscodeignore` ships only `dist/`, `media/`, `README.md`, `CHANGELOG.md` and `package.json`. Nothing is published, and no publisher account is needed: the `publisher` field is the placeholder `local-dev`.
+`npm run package` runs the production build and `vsce package --allow-missing-repository` (the flag goes once a public repository URL exists). `.vscodeignore` ships only the two bundles, the CSS and icons, `README.md`, `CHANGELOG.md`, `LICENSE`, `SECURITY.md` and `package.json`. Nothing is published. The publisher is `globalwebsolutions`; uploading is a manual step (see `docs/marketplace/MARKETPLACE.md`).
 
 ## Project layout
 

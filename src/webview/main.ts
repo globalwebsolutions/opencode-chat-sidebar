@@ -653,7 +653,7 @@ function renderEmpty(s: ViewState) {
   else if (conn.kind === "cli-not-found") {
     content = [
       h("h2", {}, "OpenCode CLI not found"),
-      h("p", {}, "Install OpenCode, or set “OpenCode Sidebar: Executable Path” in Settings."),
+      h("p", {}, "Install OpenCode, or set “OpenCode Chat Sidebar: Executable Path” in Settings."),
       h(
         "details",
         {},
@@ -1364,7 +1364,7 @@ function renderItem(item: TranscriptItem): HTMLElement {
               "div",
               {
                 className: "small muted",
-                title: "Technical details are in the OpenCode Sidebar output channel",
+                title: "Technical details are in the OpenCode Chat Sidebar output channel",
               },
               item.detail,
             )

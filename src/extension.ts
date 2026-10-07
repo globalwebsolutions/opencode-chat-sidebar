@@ -25,7 +25,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("opencodeSidebar.addSelection", () => provider.addSelection()),
     vscode.commands.registerCommand("opencodeSidebar.stop", () => provider.stop()),
   );
-  log.info("OpenCode Sidebar activated");
+  log.info("OpenCode Chat Sidebar activated");
   // Exported for the local acceptance harness; not a public API.
   return { testApi: provider.testApi };
 }

@@ -1,7 +1,12 @@
+# Whitelist: ship only what the extension needs at runtime plus required docs.
 **
 !dist/extension.js
 !dist/webview.js
-!media/**
+!media/main.css
+!media/activity.svg
+!media/icon.png
 !README.md
 !CHANGELOG.md
+!LICENSE
+!SECURITY.md
 !package.json

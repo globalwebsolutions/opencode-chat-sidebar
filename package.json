@@ -1,12 +1,17 @@
 {
   "name": "opencode-sidebar",
-  "displayName": "OpenCode Sidebar (Unofficial)",
-  "description": "Unofficial VS Code sidebar chat interface for a local OpenCode installation.",
-  "version": "0.2.0",
-  "publisher": "local-dev",
+  "displayName": "OpenCode Chat Sidebar",
+  "description": "A focused chat sidebar for OpenCode agents in VS Code.",
+  "version": "0.2.1",
+  "publisher": "globalwebsolutions",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "pricing": "Free",
   "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1c2333",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -17,8 +22,14 @@
   ],
   "keywords": [
     "opencode",
+    "ai",
+    "chat",
     "agent",
-    "chat"
+    "coding-agent",
+    "assistant",
+    "developer-tools",
+    "sidebar",
+    "llm"
   ],
   "main": "./dist/extension.js",
   "activationEvents": [],
@@ -55,28 +66,28 @@
       {
         "command": "opencodeSidebar.focusChat",
         "title": "Focus Chat",
-        "category": "OpenCode Sidebar"
+        "category": "OpenCode Chat Sidebar"
       },
       {
         "command": "opencodeSidebar.newSession",
         "title": "New Session",
-        "category": "OpenCode Sidebar",
+        "category": "OpenCode Chat Sidebar",
         "icon": "$(add)"
       },
       {
         "command": "opencodeSidebar.addCurrentFile",
         "title": "Add Current File",
-        "category": "OpenCode Sidebar"
+        "category": "OpenCode Chat Sidebar"
       },
       {
         "command": "opencodeSidebar.addSelection",
         "title": "Add Selection",
-        "category": "OpenCode Sidebar"
+        "category": "OpenCode Chat Sidebar"
       },
       {
         "command": "opencodeSidebar.stop",
         "title": "Stop",
-        "category": "OpenCode Sidebar"
+        "category": "OpenCode Chat Sidebar"
       }
     ],
     "menus": {
@@ -96,7 +107,7 @@
       ]
     },
     "configuration": {
-      "title": "OpenCode Sidebar",
+      "title": "OpenCode Chat Sidebar",
       "properties": {
         "opencodeSidebar.executablePath": {
           "type": "string",
@@ -259,7 +270,7 @@
     "pretest": "tsc -p tsconfig.test.json",
     "test": "node --test --test-reporter=spec \"out-test/test/*.test.js\"",
     "test:acceptance": "npm run build && tsc -p tsconfig.test.json && node out-test/test/acceptance/runAcceptance.js",
-    "package": "node -e \"require('fs').mkdirSync('dist-vsix',{recursive:true})\" && vsce package --skip-license --allow-missing-repository --out dist-vsix/",
+    "package": "node -e \"require('fs').mkdirSync('dist-vsix',{recursive:true})\" && vsce package --allow-missing-repository --out dist-vsix/",
     "vscode:prepublish": "npm run build",
     "test:webview": "npm run build && tsc -p tsconfig.test.json && node --test --test-reporter=spec \"out-test/test/webview/*.test.js\""
   },

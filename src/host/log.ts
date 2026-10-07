@@ -5,7 +5,7 @@ export class Logger implements vscode.Disposable {
   private readonly channel: vscode.LogOutputChannel;
 
   constructor() {
-    this.channel = vscode.window.createOutputChannel("OpenCode Sidebar", { log: true });
+    this.channel = vscode.window.createOutputChannel("OpenCode Chat Sidebar", { log: true });
   }
 
   info(message: string): void {

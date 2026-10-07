@@ -564,3 +564,36 @@ describe("catalog loading race", () => {
     assert.equal(c.selectedModel, "opencode-go/kimi", "selection after load sticks");
   });
 });
+
+describe("workspace change events during load (0.2.1 fix)", () => {
+  it("a repeated setDirectory for the same folder neither reloads nor resets the user's selection", async () => {
+    const { c, client } = setup();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    client.defaultModel = async () => {
+      await gate;
+      return "vast/qwen";
+    };
+    const first = c.setDirectory(DIR);
+    await tick(5);
+    const again = c.setDirectory(DIR); // e.g. a Git status refresh while the catalog is loading
+    release();
+    await Promise.all([first, again]);
+    assert.equal(client.callsTo("listModels").length, 1, "catalog loaded once");
+    await c.selectModel("opencode-go/kimi");
+    await c.setDirectory(DIR); // later Git refreshes
+    await tick(10);
+    assert.equal(c.selectedModel, "opencode-go/kimi");
+    assert.equal(client.callsTo("listModels").length, 1);
+  });
+
+  it("still reloads when the folder really changes", async () => {
+    const { c, client } = setup();
+    await c.setDirectory(DIR);
+    await c.setDirectory("/work/other");
+    assert.deepEqual(
+      client.callsTo("listModels").map((x) => x.args[0]),
+      [DIR, "/work/other"],
+    );
+  });
+});

@@ -13,6 +13,8 @@ import type { TranscriptItem } from "../../src/shared/model";
 import type { HostMessage, ViewState } from "../../src/shared/protocol";
 
 const ROOT = path.resolve(__dirname, "../../..");
+/** Directory holding dist/webview.js and media/main.css; override to test an unpacked VSIX. */
+const BUNDLE_ROOT = process.env.WEBVIEW_BUNDLE_ROOT ?? ROOT;
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -143,8 +145,8 @@ describe(
     before(async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ocs-webview-"));
       htmlFile = path.join(dir, "index.html");
-      const css = "file://" + path.join(ROOT, "media", "main.css");
-      const js = "file://" + path.join(ROOT, "dist", "webview.js");
+      const css = "file://" + path.join(BUNDLE_ROOT, "media", "main.css");
+      const js = "file://" + path.join(BUNDLE_ROOT, "dist", "webview.js");
       fs.writeFileSync(
         htmlFile,
         `<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="${css}"></head>

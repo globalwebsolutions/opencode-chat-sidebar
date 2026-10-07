@@ -130,6 +130,8 @@ export class SessionController {
   private errorSeq = 0;
   private budgetSeq = 0;
   private disposed = false;
+  /** Folder whose catalog is currently being loaded (guards against duplicate reloads). */
+  private loadingDirectory: string | null = null;
   /** Controller-generated events (budget/context) raised while applying a batch; flushed after it. */
   private deferred: UiEvent[] = [];
 
@@ -216,8 +218,10 @@ export class SessionController {
 
   /** Switches to a workspace directory: loads models, agents and sessions for it. */
   async setDirectory(directory: string | null): Promise<void> {
-    if (this.directory === directory && this.models !== null) return;
+    // Same folder: nothing to do if its catalog is loaded or still loading.
+    if (this.directory === directory && (this.models !== null || this.loadingDirectory === directory)) return;
     this.directory = directory;
+    this.loadingDirectory = directory;
     this.clearSession();
     this.sessions = [];
     this.models = null;
@@ -225,8 +229,15 @@ export class SessionController {
     const remembered = this.store.get<BudgetLevel>(this.key("budget"));
     this.budget.setLevel(remembered ?? this.defaults().budgetLevel ?? "off");
     this.sink.onStateChanged();
-    if (!directory) return;
-    await Promise.all([this.loadCatalog(), this.refreshSessions()]);
+    if (!directory) {
+      this.loadingDirectory = null;
+      return;
+    }
+    try {
+      await Promise.all([this.loadCatalog(), this.refreshSessions()]);
+    } finally {
+      if (this.loadingDirectory === directory) this.loadingDirectory = null;
+    }
     const rememberedSession = this.store.get<string>(this.key("session"));
     if (rememberedSession && this.sessions.some((s) => s.id === rememberedSession))
       await this.openSession(rememberedSession);

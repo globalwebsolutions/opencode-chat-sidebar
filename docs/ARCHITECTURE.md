@@ -1,6 +1,6 @@
 # Architecture
 
-OpenCode Sidebar is a thin user interface. OpenCode remains the agent engine: it owns reasoning, tools, model providers, credentials, permissions and session storage.
+OpenCode Chat Sidebar is a thin user interface. OpenCode remains the agent engine: it owns reasoning, tools, model providers, credentials, permissions and session storage.
 
 ```
 ┌────────────────────────── VS Code ──────────────────────────┐

@@ -577,6 +577,14 @@ async function v02Fixture(api: TestApi): Promise<void> {
     ac.status === "ok" && files.length === 1 && files[0] === "a.txt",
     JSON.stringify(ac),
   );
+  // VS Code's Git extension notices external edits asynchronously (it can take 10 s+ for temp
+  // folders). Ask it to refresh, as the Source Control "Refresh" button does, then wait.
+  await vscode.commands.executeCommand("git.refresh").then(undefined, () => undefined);
+  await waitFor(
+    "git refresh",
+    () => (api.viewState().workspaceChanges?.count ?? 0) >= 2 || undefined,
+    30_000,
+  ).catch(() => undefined);
   check(
     "Workspace changes counted separately",
     (api.viewState().workspaceChanges?.count ?? 0) >= 2,
