@@ -26,14 +26,14 @@ function limits(raw: unknown, fallback: BudgetLimits): BudgetLimits {
   return { maxCost: pos(r.maxCost, fallback.maxCost), maxSteps: pos(r.maxSteps, fallback.maxSteps) };
 }
 
-/** Task notification toggles (`opencodeChat.notifications.*`, all on by default). */
+/** Task notification toggles (`opencodeSidebar.notifications.*`, all on by default). */
 export function readNotificationSettings(): {
   taskComplete: boolean;
   needsInput: boolean;
   taskFailed: boolean;
   budgetStopped: boolean;
 } {
-  const c = vscode.workspace.getConfiguration("opencodeChat.notifications");
+  const c = vscode.workspace.getConfiguration("opencodeSidebar.notifications");
   return {
     taskComplete: c.get<boolean>("taskComplete", true),
     needsInput: c.get<boolean>("needsInput", true),

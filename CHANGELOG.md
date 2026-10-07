@@ -10,7 +10,7 @@ Marketplace readiness release, plus a small usability addition.
 - User-facing labels (command category, settings title, output channel) now read "OpenCode Chat Sidebar".
 - Packaging validated: lean VSIX with no tests, sources or development files.
 - **Current Task** bar under the session title shows the prompt the agent is working on (summary derived locally, no model call). Expand it for the full prompt and **Copy Prompt** (exact original text). It also shows Running / Waiting for you / Completed / Stopped / Stopped — budget reached / Failed, the latest steer, and the next queued message (+N queued). Steering and Continue once keep the task; reopening a session restores it from OpenCode messages.
-- Native **notifications** for task completed, needs input, failed and Budget Guard stop, each with **Open Chat**. Completion is suppressed while you're watching the chat; settings `opencodeChat.notifications.*` turn each type off.
+- Native **notifications** for task completed, needs input, failed and Budget Guard stop, each with **Open Chat**. Completion is suppressed while you're watching the chat; settings `opencodeSidebar.notifications.*` turn each type off.
 - Fix (found during release validation): a Git status refresh while models were still loading reloaded the catalog and could reset the selected model to OpenCode's default. Branch and Git status updates no longer reload the catalog; only switching to a different folder does.
 
 Releases 0.1.0 and 0.2.0 below were local, unpublished builds under the working name "OpenCode Sidebar".

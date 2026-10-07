@@ -181,10 +181,10 @@ The extension adds no default keyboard shortcuts. You can bind these commands in
 | `opencodeSidebar.budget.small/medium/large/custom` | see table above | `{ "maxCost": USD, "maxSteps": n }`; `0` disables that metric.                     |
 | `opencodeSidebar.budget.warnPercent`               | `80`            | Warn at this share of the budget.                                                  |
 | `opencodeSidebar.budget.contextWarnPercent`        | `80`            | Warn when the context window is this full; `0` turns the warning off.              |
-| `opencodeChat.notifications.taskComplete`          | `true`          | Notify when a task completes (suppressed while you are watching the chat).         |
-| `opencodeChat.notifications.needsInput`            | `true`          | Notify when OpenCode needs your input.                                             |
-| `opencodeChat.notifications.taskFailed`            | `true`          | Notify when a task fails.                                                          |
-| `opencodeChat.notifications.budgetStopped`         | `true`          | Notify when Budget Guard stops a task.                                             |
+| `opencodeSidebar.notifications.taskComplete`       | `true`          | Notify when a task completes (suppressed while you are watching the chat).         |
+| `opencodeSidebar.notifications.needsInput`         | `true`          | Notify when OpenCode needs your input.                                             |
+| `opencodeSidebar.notifications.taskFailed`         | `true`          | Notify when a task fails.                                                          |
+| `opencodeSidebar.notifications.budgetStopped`      | `true`          | Notify when Budget Guard stops a task.                                             |
 
 ## Privacy
 

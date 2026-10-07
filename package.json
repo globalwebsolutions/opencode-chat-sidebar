@@ -257,22 +257,22 @@
           "default": 80,
           "markdownDescription": "Warn when the context window is this full (warning only, never stops the agent). `0` disables the warning."
         },
-        "opencodeChat.notifications.taskComplete": {
+        "opencodeSidebar.notifications.taskComplete": {
           "type": "boolean",
           "default": true,
           "markdownDescription": "Show a notification when an OpenCode task completes. Not shown while you are watching the chat (view visible and VS Code focused)."
         },
-        "opencodeChat.notifications.needsInput": {
+        "opencodeSidebar.notifications.needsInput": {
           "type": "boolean",
           "default": true,
           "markdownDescription": "Show a notification when OpenCode needs your input (a question or a permission request)."
         },
-        "opencodeChat.notifications.taskFailed": {
+        "opencodeSidebar.notifications.taskFailed": {
           "type": "boolean",
           "default": true,
           "markdownDescription": "Show a notification when an OpenCode task fails."
         },
-        "opencodeChat.notifications.budgetStopped": {
+        "opencodeSidebar.notifications.budgetStopped": {
           "type": "boolean",
           "default": true,
           "markdownDescription": "Show a notification when Budget Guard stops a task."
