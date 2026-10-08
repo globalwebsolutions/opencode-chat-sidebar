@@ -13,7 +13,7 @@ describe("extension manifest", () => {
   it("keeps the release identity", () => {
     assert.deepEqual(
       [pkg.name, pkg.publisher, pkg.displayName, pkg.version],
-      ["opencode-chat-sidebar", "GlobalWebSolutions", "OpenCode Chat Sidebar GWS", "0.3.0"],
+      ["opencode-chat-sidebar", "GlobalWebSolutions", "OpenCode Chat Sidebar GWS", "0.3.1"],
     );
   });
 
@@ -37,7 +37,7 @@ describe("extension manifest", () => {
     const containers = pkg.contributes.viewsContainers.activitybar as Array<{ id: string; title: string }>;
     assert.deepEqual(
       containers.map((c) => [c.id, c.title]),
-      [["opencodeSidebar", "OpenCode Chat Sidebar"]],
+      [["opencodeSidebar", "OpenCode"]],
     );
     assert.equal(Object.keys(pkg.contributes.views).length, 1);
     assert.deepEqual(
@@ -67,5 +67,20 @@ describe("extension manifest", () => {
     const p = pkg.contributes.configuration.properties["opencodeSidebar.showStatusBarItem"];
     assert.equal(p.type, "boolean");
     assert.equal(p.default, true);
+  });
+
+  it("v0.3.1: the visible chat title is the short 'OpenCode'; branding and IDs are unchanged", () => {
+    const container = pkg.contributes.viewsContainers.activitybar[0];
+    // Activity Bar tooltip and side bar header.
+    assert.equal(container.title, "OpenCode");
+    assert.equal(container.id, "opencodeSidebar");
+    assert.equal(container.icon, "media/activity.svg");
+    const view = pkg.contributes.views.opencodeSidebar[0];
+    assert.deepEqual([view.id, view.type, view.name], ["opencodeSidebar.chat", "webview", "Chat"]);
+    // Everything else keeps the full name.
+    assert.equal(pkg.displayName, "OpenCode Chat Sidebar GWS");
+    assert.equal(pkg.contributes.configuration.title, "OpenCode Chat Sidebar");
+    for (const c of pkg.contributes.commands as Array<{ category: string }>)
+      assert.equal(c.category, "OpenCode Chat Sidebar");
   });
 });

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+UI label patch.
+
+- The chat's Activity Bar tooltip and side bar title are shortened from "OpenCode Chat Sidebar" to **OpenCode**.
+- Unchanged: Marketplace display name (OpenCode Chat Sidebar GWS), publisher, package name, extension ID `GlobalWebSolutions.opencode-chat-sidebar`, command and setting IDs, the Activity Bar icon, and all functionality.
+
 ## 0.3.0
 
 **First-run onboarding and one-click access.**

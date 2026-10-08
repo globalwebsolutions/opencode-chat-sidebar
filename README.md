@@ -68,7 +68,7 @@ OpenCode is usually driven from its terminal UI, desktop app or API. This extens
 ## Getting started
 
 1. In VS Code, open the **Extensions** view, search for **OpenCode Chat Sidebar GWS** and click **Install**.
-2. Click the **OpenCode Chat Sidebar** icon in the Activity Bar, or **OpenCode Chat** in the Status Bar.
+2. Click the **OpenCode** icon in the Activity Bar, or **OpenCode Chat** in the Status Bar.
 3. If OpenCode is not installed, click **Install OpenCode**. This opens OpenCode's official install guide ([opencode.ai/docs](https://opencode.ai/docs#install)); the extension never runs an installer for you. Install it, then click **Check again**.
 4. If OpenCode is installed but not running, click **Start OpenCode** (this runs `opencode service start`).
 5. If no models are available, click **Sign in to OpenCode**. OpenCode's own sign-in (`opencode auth login opencode --method device`) opens in a VS Code terminal: approve it in your browser and the sidebar picks it up automatically. To use another provider, click **Connect another provider** (OpenCode's provider picker, `opencode auth login`).
@@ -87,7 +87,7 @@ The setup card appears only while something is missing. It shows a checklist (Ex
 
 All of these run the same command, **OpenCode Chat Sidebar: Focus Chat**, which reveals the chat wherever you placed it and puts the cursor in the message box:
 
-- the **OpenCode Chat Sidebar** icon in the Activity Bar;
+- the **OpenCode** icon in the Activity Bar;
 - the **OpenCode Chat** item in the Status Bar (it also shows the connection state; hide it with `opencodeSidebar.showStatusBarItem`);
 - **Cmd+Alt+O** on macOS;
 - **Open Chat** in the extension's notifications;
@@ -101,7 +101,7 @@ On Windows and Linux there is no default shortcut, because Ctrl+Alt combinations
 
 The extension never opens or focuses the chat by itself after installation.
 
-**Recommended layout:** drag the OpenCode Chat Sidebar icon to the **Secondary Side Bar** (the right side), or right-click it and choose **Move To → Secondary Side Bar**. The chat then sits beside your editor and the Explorer stays on the left. The extension shows this tip once and never moves your layout itself.
+**Recommended layout:** drag the OpenCode icon to the **Secondary Side Bar** (the right side), or right-click it and choose **Move To → Secondary Side Bar**. The chat then sits beside your editor and the Explorer stays on the left. The extension shows this tip once and never moves your layout itself.
 
 ## Current Task
 

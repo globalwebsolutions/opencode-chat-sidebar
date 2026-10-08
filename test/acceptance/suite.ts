@@ -1382,9 +1382,9 @@ async function easyOpen(api: TestApi, reload: boolean): Promise<void> {
     );
   }
   check(
-    "G. One Activity Bar container titled 'OpenCode Chat Sidebar' with one view",
+    "G. One Activity Bar container titled 'OpenCode' with one view",
     pj.contributes.viewsContainers.activitybar.length === 1 &&
-      pj.contributes.viewsContainers.activitybar[0].title === "OpenCode Chat Sidebar" &&
+      pj.contributes.viewsContainers.activitybar[0].title === "OpenCode" &&
       pj.contributes.views.opencodeSidebar.length === 1,
   );
   check(
