@@ -20,6 +20,7 @@ import { displayTitle, isUsableTitle } from "./titles";
 import { OpenCodeHttpError, type OpenCodeClient } from "../opencode/client";
 import { describeSensitive, EventNormalizer, historyToEvents } from "../opencode/events";
 import type {
+  AccountStatus,
   AgentOption,
   BudgetLevel,
   BudgetView,
@@ -121,6 +122,12 @@ export class SessionController {
   directory: string | null = null;
   models: ModelOption[] | null = null;
   agents: AgentOption[] | null = null;
+  /** Account / provider connection evidence; null = not checked yet or could not be checked. */
+  account: AccountStatus | null = null;
+  /** True while the model/agent catalog for the current folder is loading. */
+  catalogLoading = false;
+  /** The catalog for the current folder has been published at least once. */
+  catalogLoaded = false;
   selectedModel: string | null = null;
   selectedAgent: string | null = null;
   /** Selected variant for the selected model; null = model default. */
@@ -163,6 +170,12 @@ export class SessionController {
   private notified = new Set<string>();
   /** Folder whose catalog is currently being loaded (guards against duplicate reloads). */
   private loadingDirectory: string | null = null;
+  private catalogGeneration = 0;
+  /** Bumped by every user selection, so a catalog load that raced with it keeps the choice. */
+  private selectionVersion = 0;
+  private catalogTimer: ReturnType<typeof setTimeout> | undefined;
+  private catalogRefresh: Promise<void> | null = null;
+  private catalogRefreshAgain = false;
   /** Controller-generated events (budget/context) raised while applying a batch; flushed after it. */
   private deferred: UiEvent[] = [];
 
@@ -172,7 +185,12 @@ export class SessionController {
     private readonly sink: ControllerSink,
     private readonly log: ControllerLog,
     private readonly defaults: () => ControllerDefaults,
-    private readonly timing = { debounceMs: 400, stopCheckMs: 15_000, modelRetryMs: 1500 },
+    private readonly timing: {
+      debounceMs: number;
+      stopCheckMs: number;
+      modelRetryMs: number;
+      catalogDebounceMs?: number;
+    } = { debounceMs: 400, stopCheckMs: 15_000, modelRetryMs: 1500 },
   ) {
     this.budget = new BudgetTracker(() => {
       const d = this.defaults();
@@ -196,6 +214,7 @@ export class SessionController {
     clearTimeout(this.sessionsTimer);
     clearTimeout(this.changesTimer);
     clearTimeout(this.stopTimer);
+    clearTimeout(this.catalogTimer);
   }
 
   private strings(): ControllerStrings {
@@ -257,6 +276,8 @@ export class SessionController {
     this.sessions = [];
     this.models = null;
     this.agents = null;
+    this.account = null;
+    this.catalogLoaded = false;
     const remembered = this.store.get<BudgetLevel>(this.key("budget"));
     this.budget.setLevel(remembered ?? this.defaults().budgetLevel ?? "off");
     this.sink.onStateChanged();
@@ -282,38 +303,96 @@ export class SessionController {
     return `opencodeSidebar.variant:${this.directory ?? ""}:${modelKey}`;
   }
 
-  async loadCatalog(): Promise<void> {
+  /**
+   * Loads models, agents and account status for the current folder. With `keepSelection`
+   * (a refresh), the current model, variant and agent stay selected while they still exist.
+   */
+  async loadCatalog(options: { keepSelection?: boolean } = {}): Promise<void> {
     const dir = this.directory;
     if (!dir) return;
-    let models: ModelOption[] | null;
-    try {
-      models = await this.client.listModels(dir);
-      // A location that OpenCode has not loaded yet briefly reports no models.
-      for (let i = 0; i < 2 && models.length === 0; i++) {
-        await delay(this.timing.modelRetryMs);
-        models = await this.client.listModels(dir);
-      }
-    } catch (e) {
-      this.log.error("Loading models failed", e);
-      models = null;
-    }
-    let agents: AgentOption[] | null;
-    try {
-      agents = await this.client.listAgents(dir);
-    } catch (e) {
-      this.log.error("Loading agents failed", e);
-      agents = null;
-    }
-    const picked = await this.pickDefaults(dir, models ?? [], agents ?? []);
-    if (dir !== this.directory) return;
-    // Publish the catalog and the defaults together, so a selection made by the user can
-    // never be overwritten by defaults that were still being resolved.
-    this.models = models;
-    this.agents = agents;
-    this.selectedModel = picked.model;
-    this.selectedVariant = this.rememberedVariant(picked.model);
-    this.selectedAgent = picked.agent;
+    const generation = ++this.catalogGeneration;
+    const selection = this.selectionVersion;
+    this.catalogLoading = true;
     this.sink.onStateChanged();
+    try {
+      const accountP = this.client.accountStatus(dir).catch((e: unknown) => {
+        this.log.error("Checking OpenCode connections failed", e);
+        return null;
+      });
+      let models: ModelOption[] | null;
+      try {
+        models = await this.client.listModels(dir);
+        // A location that OpenCode has not loaded yet briefly reports no models. Refreshes
+        // (after the first load) report what OpenCode lists right away.
+        const retries = options.keepSelection ? 0 : 2;
+        for (let i = 0; i < retries && models.length === 0; i++) {
+          await delay(this.timing.modelRetryMs);
+          models = await this.client.listModels(dir);
+        }
+      } catch (e) {
+        this.log.error("Loading models failed", e);
+        models = null;
+      }
+      let agents: AgentOption[] | null;
+      try {
+        agents = await this.client.listAgents(dir);
+      } catch (e) {
+        this.log.error("Loading agents failed", e);
+        agents = null;
+      }
+      const account = await accountP;
+      const picked = await this.pickDefaults(dir, models ?? [], agents ?? []);
+      if (dir !== this.directory || generation !== this.catalogGeneration || this.disposed) return;
+      // Publish the catalog and the defaults together, so a selection made by the user can
+      // never be overwritten by defaults that were still being resolved.
+      const keep = options.keepSelection || selection !== this.selectionVersion;
+      const prevModel = keep && models?.some((m) => m.key === this.selectedModel) ? this.selectedModel : null;
+      const prevAgent = keep && agents?.some((a) => a.id === this.selectedAgent) ? this.selectedAgent : null;
+      const prevVariant = this.selectedVariant;
+      this.models = models;
+      this.agents = agents;
+      this.account = account;
+      this.catalogLoaded = true;
+      this.selectedModel = prevModel ?? picked.model;
+      const variants = models?.find((m) => m.key === this.selectedModel)?.variants ?? [];
+      this.selectedVariant =
+        prevModel && (prevVariant === null || variants.includes(prevVariant))
+          ? prevVariant
+          : this.rememberedVariant(this.selectedModel);
+      this.selectedAgent = prevAgent ?? picked.agent;
+    } finally {
+      if (generation === this.catalogGeneration) this.catalogLoading = false;
+      this.sink.onStateChanged();
+    }
+  }
+
+  /** Re-checks models, agents and account status without touching the open session. */
+  async refreshCatalog(): Promise<void> {
+    clearTimeout(this.catalogTimer);
+    if (!this.directory) return;
+    // Refreshes requested while one is running are coalesced into one more run, so frequent
+    // triggers (events, the sign-in poll) can never keep superseding each other.
+    if (this.catalogRefresh) {
+      this.catalogRefreshAgain = true;
+      return this.catalogRefresh;
+    }
+    this.catalogRefresh = (async () => {
+      try {
+        do {
+          this.catalogRefreshAgain = false;
+          await this.loadCatalog({ keepSelection: true });
+        } while (this.catalogRefreshAgain && !this.disposed);
+      } finally {
+        this.catalogRefresh = null;
+      }
+    })();
+    return this.catalogRefresh;
+  }
+
+  /** OpenCode reports provider / model / integration changes, e.g. after `opencode auth login`. */
+  private scheduleCatalogRefresh(): void {
+    clearTimeout(this.catalogTimer);
+    this.catalogTimer = setTimeout(() => void this.refreshCatalog(), this.timing.catalogDebounceMs ?? 1000);
   }
 
   private async pickDefaults(
@@ -470,6 +549,7 @@ export class SessionController {
   async selectModel(key: string): Promise<void> {
     const model = this.models?.find((m) => m.key === key);
     if (!model) return;
+    this.selectionVersion++;
     this.selectedModel = key;
     // Restore this model's last valid variant for the workspace.
     this.selectedVariant = this.rememberedVariant(key);
@@ -483,6 +563,7 @@ export class SessionController {
     const model = this.models?.find((m) => m.key === this.selectedModel);
     if (!model) return;
     if (variant !== null && !model.variants.includes(variant)) return;
+    this.selectionVersion++;
     this.selectedVariant = variant;
     if (this.directory) await this.store.update(this.variantKey(model.key), variant ?? undefined);
     this.sink.onStateChanged();
@@ -502,6 +583,7 @@ export class SessionController {
 
   async selectAgent(id: string): Promise<void> {
     if (!this.agents?.some((a) => a.id === id)) return;
+    this.selectionVersion++;
     this.selectedAgent = id;
     if (this.directory) await this.store.update(this.key("agent"), id);
     this.sink.onStateChanged();
@@ -816,6 +898,7 @@ export class SessionController {
   /** Entry point for every raw event from the OpenCode event stream. */
   handleRawEvent(raw: unknown): void {
     if (this.disposed) return;
+    if (isCatalogEvent(raw)) this.scheduleCatalogRefresh();
     const env = this.normalizer.normalize(raw);
     if (!env) return;
     if (env.sessionsChanged && (env.directory === null || env.directory === this.directory))
@@ -1163,6 +1246,20 @@ export class SessionController {
   get changes(): FileChange[] {
     return this.agentChanges.status === "ok" ? this.agentChanges.files : [];
   }
+}
+
+/** Events after which models, providers or connections may have changed (e.g. a sign-in). */
+const CATALOG_EVENTS = new Set([
+  "integration.updated",
+  "provider.updated",
+  "model.updated",
+  "models-dev.refreshed",
+]);
+
+export function isCatalogEvent(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const type = (raw as { type?: unknown }).type;
+  return typeof type === "string" && CATALOG_EVENTS.has(type);
 }
 
 function delay(ms: number): Promise<void> {

@@ -101,3 +101,17 @@ Field types supported in forms are exactly those in `@opencode/schema` `Form.Fie
 **Agent-only attribution.** OpenCode snapshots the whole working tree at step boundaries. The session diff compares the first snapshot of the range with the last. Changes that existed before the session (including the user's dirty files) are part of the baseline and are not attributed to the agent. The extension rebuilds both file versions from the full-file patch (`src/core/patch.ts`) and refuses partial or binary patches. If the diff request fails, or the agent's edit tools reported changes the snapshots do not contain, the UI says **Agent-only diff unavailable** and falls back to the workspace diff.
 
 **Budget metrics actually used.** `session.usage.updated.cost` (cumulative session USD) and `session.step.ended` / `session.step.failed` (one per completed agent step). No provider quota endpoint exists, so none is shown.
+
+## v0.3 onboarding: account and provider state
+
+| Purpose                     | Mechanism                                                                                                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Account / provider evidence | `GET /api/integration?location[directory]=…`, reduced to `{ opencode: connected \| needs-auth \| none, otherProviders }`                                                |
+| Sign in to OpenCode         | `opencode auth login opencode --method device` in a VS Code terminal (`--server <url>` when `serverUrl` is set)                                                         |
+| Connect another provider    | `opencode auth login` (OpenCode's interactive provider picker) in a VS Code terminal                                                                                    |
+| Re-check after sign-in      | `integration.updated`, `provider.updated`, `model.updated`, `models-dev.refreshed` events (debounced), terminal exit, and a 3 s poll while the sign-in terminal is open |
+
+- The integration `opencode` is the OpenCode Console account (methods: API key, `OPENCODE_API_KEY`, and the `device` OAuth flow "OpenCode Console account"). Providers `opencode` (Zen) and `opencode-go` use it.
+- Only `id`, `connections[].type` and `connections[].status.status` (`needs_auth`) are read. Connection labels (which can be personal), ids and methods are ignored. `GET /api/credential` returns credential values and is **never** called.
+- OpenCode 2.0.24 serves some free `opencode/*-free` models without an account, so "no account" alone does not block the chat. Without any connection and without models, the sidebar asks the user to sign in.
+- A fresh OpenCode location can briefly list no models; the catalog is retried before "No models" is shown.

@@ -16,6 +16,12 @@ OpenCode is usually driven from its terminal UI, desktop app or API. This extens
 
 ## Features
 
+**Getting set up**
+
+- A first-run setup card that detects what is missing (OpenCode not installed, service stopped, no account, no models, no folder) and offers the one next step: Install OpenCode, Start OpenCode, Sign in to OpenCode, Configure models, Open Folder.
+- Sign-in through OpenCode's own login. The extension never sees your password.
+- One-click access from the Activity Bar, the Status Bar, notifications and a keyboard shortcut.
+
 **Chat and sessions**
 
 - Streaming chat with Markdown, tables and code blocks.
@@ -55,20 +61,47 @@ OpenCode is usually driven from its terminal UI, desktop app or API. This extens
 ## Requirements
 
 - Visual Studio Code 1.95 or newer.
-- [OpenCode](https://opencode.ai) **2.x** installed locally, with its v2 background service (`opencode service`). OpenCode 1.x is not supported.
-- At least one model provider configured and signed in within OpenCode (for example with `opencode auth`). Model usage and any costs are between you and your provider.
+- [OpenCode](https://opencode.ai) **2.x** installed locally, with its v2 background service (`opencode service`). OpenCode 1.x is not supported. The sidebar helps you install, start and sign in to OpenCode the first time (see below).
+- A model in OpenCode: OpenCode's free models, your OpenCode account (OpenCode Zen / OpenCode Go), or another provider you connect in OpenCode. Model usage and any costs are between you and your provider.
 - A trusted workspace. The extension is disabled in Restricted Mode, because OpenCode can read files and run commands.
 
-## Installation
+## Getting started
 
-1. Open the **Extensions** view in VS Code.
-2. Search for **OpenCode Chat Sidebar**.
-3. Click **Install**.
-4. Click the **OpenCode** icon to open the chat view.
-5. If OpenCode isn't running, click **Start OpenCode** (this runs `opencode service start`). If the `opencode` executable can't be found, use **Configure Path**.
-6. Pick a model and an agent, then type your message.
+1. In VS Code, open the **Extensions** view, search for **OpenCode Chat Sidebar GWS** and click **Install**.
+2. Click the **OpenCode Chat Sidebar** icon in the Activity Bar, or **OpenCode Chat** in the Status Bar.
+3. If OpenCode is not installed, click **Install OpenCode**. This opens OpenCode's official install guide ([opencode.ai/docs](https://opencode.ai/docs#install)); the extension never runs an installer for you. Install it, then click **Check again**.
+4. If OpenCode is installed but not running, click **Start OpenCode** (this runs `opencode service start`).
+5. If no models are available, click **Sign in to OpenCode**. OpenCode's own sign-in (`opencode auth login opencode --method device`) opens in a VS Code terminal: approve it in your browser and the sidebar picks it up automatically. To use another provider, click **Connect another provider** (OpenCode's provider picker, `opencode auth login`).
+6. Open a folder, pick a model and an agent, and start chatting.
 
-**Recommended layout:** drag the OpenCode icon to the **Secondary Side Bar** (the right side), or right-click it and choose **Move To → Secondary Side Bar**. The chat then sits beside your editor and the Explorer stays on the left. The extension shows this tip once and never moves your layout itself.
+<p align="center"><img src="https://raw.githubusercontent.com/globalwebsolutions/opencode-chat-sidebar/v0.3.0/docs/marketplace/screenshots/5-onboarding.png" alt="First-run setup: Sign in to OpenCode, with a checklist of Extension installed, OpenCode installed, OpenCode connected, Account signed in and Models available" width="360"></p>
+
+The setup card appears only while something is missing. It shows a checklist (Extension installed, OpenCode installed, OpenCode connected, Account signed in, Models available) and one main action. When everything is ready it hides itself, and users who already have OpenCode configured never see it.
+
+- **Signing in is optional when models are available.** OpenCode offers some free models without an account. In that case the sidebar only shows a small note you can dismiss: "No OpenCode account is connected. Sign in for more models."
+- **The extension never sees your password or keys.** Sign-in, accounts, providers and subscriptions are handled entirely by OpenCode and opencode.ai. Manage your account at [opencode.ai/auth](https://opencode.ai/auth); provider setup is described in [OpenCode's provider docs](https://opencode.ai/docs/providers/) and [OpenCode Go](https://opencode.ai/docs/go/).
+- **Refresh** (in the setup card, or the ⟳ button in the view title) re-checks OpenCode, the service, your account, providers, models and agents without reloading the window. The sidebar also re-checks on its own when OpenCode reports a new sign-in or provider.
+- The header and Status Bar say **Connected** only when you can actually chat. Otherwise they say _Sign-in required_, _No models_, _OpenCode stopped_ or _OpenCode not installed_.
+
+## Opening the chat
+
+All of these run the same command, **OpenCode Chat Sidebar: Focus Chat**, which reveals the chat wherever you placed it and puts the cursor in the message box:
+
+- the **OpenCode Chat Sidebar** icon in the Activity Bar;
+- the **OpenCode Chat** item in the Status Bar (it also shows the connection state; hide it with `opencodeSidebar.showStatusBarItem`);
+- **Cmd+Alt+O** on macOS;
+- **Open Chat** in the extension's notifications;
+- the Command Palette.
+
+On Windows and Linux there is no default shortcut, because Ctrl+Alt combinations type characters (AltGr) on many keyboard layouts. To add one, run **Preferences: Open Keyboard Shortcuts (JSON)** and add for example:
+
+```json
+{ "key": "ctrl+alt+o", "command": "opencodeSidebar.focusChat" }
+```
+
+The extension never opens or focuses the chat by itself after installation.
+
+**Recommended layout:** drag the OpenCode Chat Sidebar icon to the **Secondary Side Bar** (the right side), or right-click it and choose **Move To → Secondary Side Bar**. The chat then sits beside your editor and the Explorer stays on the left. The extension shows this tip once and never moves your layout itself.
 
 ## Current Task
 
@@ -164,15 +197,17 @@ When the agent's changes cannot be attributed reliably (for example binary files
 
 ## Commands
 
-| Command                                 | What it does                             |
-| --------------------------------------- | ---------------------------------------- |
-| OpenCode Chat Sidebar: Focus Chat       | Reveal the chat and focus the input      |
-| OpenCode Chat Sidebar: New Session      | Start a fresh conversation               |
-| OpenCode Chat Sidebar: Add Current File | Attach the active editor's file          |
-| OpenCode Chat Sidebar: Add Selection    | Attach the selected lines (path + range) |
-| OpenCode Chat Sidebar: Stop             | Cancel the running task                  |
+| Command                                    | What it does                                             |
+| ------------------------------------------ | -------------------------------------------------------- |
+| OpenCode Chat Sidebar: Focus Chat          | Reveal the chat and focus the input                      |
+| OpenCode Chat Sidebar: Refresh Connection  | Re-check OpenCode, account, providers, models and agents |
+| OpenCode Chat Sidebar: Sign in to OpenCode | Run OpenCode's own sign-in in a terminal                 |
+| OpenCode Chat Sidebar: New Session         | Start a fresh conversation                               |
+| OpenCode Chat Sidebar: Add Current File    | Attach the active editor's file                          |
+| OpenCode Chat Sidebar: Add Selection       | Attach the selected lines (path + range)                 |
+| OpenCode Chat Sidebar: Stop                | Cancel the running task                                  |
 
-The extension adds no default keyboard shortcuts. You can bind these commands in **Preferences: Open Keyboard Shortcuts**.
+The only default shortcut is **Cmd+Alt+O** (Focus Chat) on macOS. You can bind any command in **Preferences: Open Keyboard Shortcuts**.
 
 ## Settings
 
@@ -185,6 +220,7 @@ The extension adds no default keyboard shortcuts. You can bind these commands in
 | `opencodeSidebar.defaultAgent`                     | empty           | Agent to preselect (e.g. `build`, `plan`).                                         |
 | `opencodeSidebar.autoStart`                        | `false`         | Start the OpenCode background service when the view opens.                         |
 | `opencodeSidebar.showUsage`                        | `true`          | Show context, cost and step figures.                                               |
+| `opencodeSidebar.showStatusBarItem`                | `true`          | Show the OpenCode Chat item in the Status Bar.                                     |
 | `opencodeSidebar.budget.default`                   | `medium`        | Budget level for workspaces without a saved choice.                                |
 | `opencodeSidebar.budget.small/medium/large/custom` | see table above | `{ "maxCost": USD, "maxSteps": n }`; `0` disables that metric.                     |
 | `opencodeSidebar.budget.warnPercent`               | `80`            | Warn at this share of the budget.                                                  |
@@ -199,9 +235,11 @@ The extension adds no default keyboard shortcuts. You can bind these commands in
 - The extension talks only to **your local OpenCode service**, by default on `127.0.0.1`. It does not send anything to any service of its own.
 - **No telemetry** is collected by this extension.
 - **No credentials are stored** by the extension. Provider credentials stay in OpenCode. The local service password is read from OpenCode's own registration file and kept in memory only.
+- **Sign-in happens in OpenCode.** The extension never asks for your OpenCode password, email, API keys or tokens, has no login form of its own, and never reads browser cookies. **Sign in to OpenCode** runs OpenCode's own `opencode auth login` in a VS Code terminal; OpenCode stores the result.
+- To decide what the setup card shows, the extension asks OpenCode only _whether_ an account or provider is connected (OpenCode's integration list). It never requests credential values, and account names or labels are not passed to the chat view or logged.
 - **Model and provider traffic is handled by OpenCode** and your provider configuration. Those services have their own policies.
 - **Workspace content is sent only when you attach it**, or when the agent reads it through OpenCode's tools under OpenCode's permission rules.
-- The extension **does not scan your repository** on activation. The file list for **+ Context** is built only when you open that picker.
+- The extension activates after VS Code has started, to show its Status Bar item. It does not connect to OpenCode until you open the chat, and it **does not scan your repository** on activation. The file list for **+ Context** is built only when you open that picker.
 - Diagnostic logs go to the **OpenCode Chat Sidebar** output channel. Prompts and file contents are not logged, and credential-looking values are redacted.
 
 ## Security

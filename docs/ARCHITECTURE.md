@@ -103,3 +103,11 @@ The layering is unchanged. New logic lives in VS Code-free core modules:
 - **Inbox (steer/queue)**: `inbox.*` events are handled by the controller. Pending items live in `ViewState.pending`; on `inbox.delivered` the controller emits a `user.message`, so the transcript shows messages in the order the agent received them.
 - **Agent changes** (`ViewState.agentChanges`) replace v0.1's `changes`. Patches stay in the host. `AgentDocumentProvider` (scheme `opencode-sidebar-agent`) serves the reconstructed sides to `vscode.diff` / `vscode.changes`. **Workspace changes** come from the Git extension (`uncommitted` count, HEAD ↔ working tree).
 - **Webview rendering**: item updates are coalesced into one render per animation frame. Focus is restored by `data-key` after an item re-renders, so keyboard users keep their place.
+
+## Onboarding and easy open (0.3.0)
+
+- `src/core/onboarding.ts` is a pure function (`deriveOnboarding`) from connection status, folder, catalog, account evidence and sign-in progress to a stage (`not-installed`, `stopped`, `error`, `connecting`, `no-folder`, `loading`, `sign-in`, `sign-in-expired`, `no-models`, `catalog-error`, `ready`), a checklist and an optional non-blocking hint. The host puts it in `ViewState.onboarding`. The webview renders the setup card, the header status and the composer state from it, and the host derives the Status Bar text from it.
+- `SessionController.loadCatalog` loads models, agents and the account status together and publishes them atomically. A refresh (`refreshCatalog`, or OpenCode catalog events) keeps the current model, variant and agent when they still exist.
+- Sign-in runs the OpenCode CLI as the terminal's process (`shellPath` + `shellArgs`, no shell string). The host polls the catalog while that terminal is open and classifies its exit (completed, cancelled, failed).
+- Webview messages for onboarding carry no data except `openOfficial`, which names a link key; the host maps keys to official URLs, so the webview cannot open arbitrary pages through it.
+- `opencodeSidebar.focusChat` is the single entry point (Activity Bar, Status Bar, keybinding, notifications). If the view has not been resolved yet, input focus is applied when the webview reports ready.

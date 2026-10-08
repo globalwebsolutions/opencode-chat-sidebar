@@ -7,6 +7,7 @@ import type {
 } from "../src/opencode/client";
 import { OpenCodeHttpError } from "../src/opencode/client";
 import type {
+  AccountStatus,
   AgentOption,
   FormAnswer,
   FormRequest,
@@ -74,6 +75,7 @@ export class MockClient implements OpenCodeClient {
   }
   async listModels(directory: string) {
     this.record("listModels", directory);
+    if (this.modelsError) throw this.modelsError;
     if (this.modelResponses?.length) return this.modelResponses.shift()!;
     return this.models;
   }
@@ -81,7 +83,18 @@ export class MockClient implements OpenCodeClient {
     return this.serverDefault;
   }
   async listAgents() {
+    this.record("listAgents");
+    if (this.agentsError) throw this.agentsError;
     return this.agents;
+  }
+  account: AccountStatus = { opencode: "connected", otherProviders: false };
+  accountError: Error | null = null;
+  agentsError: Error | null = null;
+  modelsError: Error | null = null;
+  async accountStatus(directory: string) {
+    this.record("accountStatus", directory);
+    if (this.accountError) throw this.accountError;
+    return { ...this.account };
   }
   async listSessions(directory: string, limit: number) {
     this.record("listSessions", directory, limit);

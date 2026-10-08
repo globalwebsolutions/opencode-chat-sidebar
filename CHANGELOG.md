@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.3.0
+
+**First-run onboarding and one-click access.**
+
+Setup
+
+- **Setup card with a checklist** (Extension installed, OpenCode installed, OpenCode connected, Account signed in, Models available). It detects the actual state and offers one next step:
+  - OpenCode not installed: **Install OpenCode** (opens OpenCode's official install guide; nothing is run for you) and **Check again**.
+  - Service not running: **Start OpenCode** (`opencode service start`), then the sidebar continues by itself.
+  - No account and no models: **Sign in to OpenCode** or **Connect another provider**.
+  - Account or provider connected but no models: "No models are available yet." with **Configure models** and **Refresh**.
+  - No folder open: **Open Folder**.
+  - Ready: the card hides itself. Users who already have OpenCode configured never see it.
+- **Sign in to OpenCode** runs OpenCode's own sign-in (`opencode auth login opencode --method device`) in a VS Code terminal. **Connect another provider** opens OpenCode's provider picker (`opencode auth login`). The sidebar re-checks automatically when OpenCode reports the change, and reports a cancelled or failed sign-in. The extension never asks for, sees or stores passwords, keys or tokens.
+- Signing in is optional when OpenCode offers models without an account (OpenCode's free models). A small, dismissible note suggests it instead of blocking the chat. An expired OpenCode sign-in is reported when OpenCode says so.
+- The account state comes only from OpenCode's integration list (whether a connection exists, and whether it needs sign-in). Credential values are never requested, and account labels are not passed to the chat view. The sidebar never claims you are signed out unless OpenCode shows no connection at all.
+- **Refresh Connection** (command, view title button, setup card) re-checks the service, account, providers, models and agents without reloading the window, and keeps your model, variant and agent selection.
+- The header says **Connected** only when you can chat. Otherwise it says _Sign-in required_, _No models_, _OpenCode stopped_, _OpenCode not installed_ or _No folder open_. The model and agent pickers explain why they are empty instead of showing "Models unavailable" / "Agents unavailable".
+- Links go only to official pages: opencode.ai/docs (install), opencode.ai/auth (account), opencode.ai/docs/providers and opencode.ai/docs/go, plus "Need help? View setup guide" (this README).
+
+Easy open
+
+- **Status Bar item**: _OpenCode Chat_, then _OpenCode: Connected_ / _Sign in required_ / _Stopped_ / _Not installed_ / _No models_. Clicking it opens the chat. Turn it off with `opencodeSidebar.showStatusBarItem`.
+- **Cmd+Alt+O** on macOS opens the chat. It is not bound by default on Windows/Linux, where Ctrl+Alt combinations type characters on many keyboard layouts; the README shows how to add your own.
+- The Activity Bar entry is now titled **OpenCode Chat Sidebar**.
+- The Activity Bar, Status Bar, shortcut, Command Palette and the notifications' **Open Chat** all use one command, **OpenCode Chat Sidebar: Focus Chat**. It reveals the chat wherever it is (Primary or Secondary Side Bar) and focuses the message box, including when the view had not been opened yet.
+- New commands: **Refresh Connection** and **Sign in to OpenCode**.
+- The extension now activates after VS Code has started (`onStartupFinished`) to show the Status Bar item. It still does not connect to OpenCode or take focus until you open the chat.
+
+Fixes (found during release validation)
+
+- Changing several connection settings in quick succession (for example the executable path and the server URL) could leave the sidebar stuck on "Connecting…". Reconnects are now serialized and always use the latest settings.
+- Catalog refreshes that overlap (OpenCode events plus the sign-in check) are coalesced, so the state always updates.
+
 ## 0.2.4
 
 Packaging-only release. No functional changes.

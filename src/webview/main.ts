@@ -4,13 +4,15 @@
 
 import type {
   BudgetLevel,
+  CheckState,
+  OnboardingStage,
   FileChange,
   FormAnswer,
   FormField,
   InboxDelivery,
   TranscriptItem,
 } from "../shared/model";
-import type { HostMessage, ViewState, WebviewMessage } from "../shared/protocol";
+import type { HostMessage, OfficialLink, ViewState, WebviewMessage } from "../shared/protocol";
 import { Transcript } from "../shared/transcript";
 import { translate, type StringKey } from "./i18n";
 import { parseMarkdown, type Block, type Inline } from "./markdown";
@@ -310,17 +312,14 @@ function select(
 function renderHeader(s: ViewState) {
   const conn = s.connection;
   const connected = conn.kind === "connected";
-  const statusText =
-    conn.kind === "connected"
-      ? "Connected"
-      : conn.kind === "connecting"
-        ? "Connecting…"
-        : conn.kind === "not-running"
-          ? "Not running"
-          : conn.kind === "cli-not-found"
-            ? "CLI not found"
-            : "Error";
-  const statusTitle = conn.kind === "connected" ? `OpenCode ${conn.version} at ${conn.url}` : statusText;
+  const stage = s.onboarding.stage;
+  // "Connected" only when the chat is usable.
+  const statusText = STAGE_STATUS[stage];
+  const statusTitle =
+    conn.kind === "connected" ? `${statusText} — OpenCode ${conn.version} at ${conn.url}` : statusText;
+  const loading =
+    stage === "loading" ||
+    (connected && s.models === null && !!s.workspace.active && stage !== "catalog-error");
 
   const ws = s.workspace;
   const repoLabel =
@@ -366,7 +365,15 @@ function renderHeader(s: ViewState) {
     s.selectedModel,
     !connected,
     (v) => send({ type: "selectModel", key: v }),
-    !connected ? "—" : s.models ? "No models configured" : "Models unavailable",
+    !connected
+      ? "—"
+      : !s.workspace.active
+        ? "Open a folder first"
+        : loading
+          ? "Loading models…"
+          : s.models
+            ? "No models — connect a provider"
+            : "Models could not be loaded",
   );
   const model = models.find((m) => m.key === s.selectedModel);
   const variantSel =
@@ -390,7 +397,15 @@ function renderHeader(s: ViewState) {
     s.selectedAgent,
     !connected,
     (v) => send({ type: "selectAgent", id: v }),
-    !connected ? "—" : "Agents unavailable",
+    !connected
+      ? "—"
+      : !s.workspace.active
+        ? "Open a folder first"
+        : loading
+          ? "Loading agents…"
+          : s.agents
+            ? "No agents available"
+            : "Agents could not be loaded",
   );
 
   const levels: BudgetLevel[] = ["off", "small", "medium", "large", "custom"];
@@ -446,7 +461,12 @@ function renderHeader(s: ViewState) {
         ),
         h(
           "span",
-          { className: `status status-${conn.kind}`, title: statusTitle, role: "status" },
+          {
+            className: `status status-${conn.kind} stage-${stage}`,
+            title: statusTitle,
+            role: "status",
+            "data-testid": "connection-status",
+          },
           h("span", { className: "dot", "aria-hidden": "true" }),
           statusText,
         ),
@@ -569,6 +589,47 @@ function renderHeader(s: ViewState) {
         "div",
         { className: "banner info" },
         `Multi-root workspace — OpenCode works in “${ws.active?.name ?? "?"}”.`,
+      ),
+    );
+  }
+  const ob = s.onboarding;
+  if (ob.stage === "ready" && ob.hint) {
+    const expired = ob.hint === "sign-in-expired";
+    banners.push(
+      h(
+        "div",
+        {
+          className: `banner ${expired ? "warn" : "info"} hint-banner`,
+          role: "note",
+          "data-testid": "sign-in-hint",
+        },
+        h(
+          "span",
+          {},
+          ob.signIn === "waiting"
+            ? "Waiting for sign-in — finish it in the OpenCode terminal and your browser."
+            : expired
+              ? "OpenCode reports that your OpenCode account sign-in needs to be renewed."
+              : "No OpenCode account is connected. Sign in for more models.",
+        ),
+        h(
+          "span",
+          { className: "hint-actions" },
+          ob.signIn === "waiting"
+            ? null
+            : h("button", { className: "btn small", onclick: () => send({ type: "signIn" }) }, "Sign in"),
+          expired
+            ? null
+            : h(
+                "button",
+                {
+                  className: "btn subtle small",
+                  "aria-label": "Dismiss sign-in note",
+                  onclick: () => send({ type: "dismissSignInHint" }),
+                },
+                "Dismiss",
+              ),
+        ),
       ),
     );
   }
@@ -791,76 +852,247 @@ function renderSessions(s: ViewState) {
 // ------------------------------------------------------------- empty state
 
 function renderEmpty(s: ViewState) {
-  const conn = s.connection;
+  const stage = s.onboarding.stage;
   let content: Array<Node | null> = [];
-  if (conn.kind === "connecting") content = [h("p", {}, "Connecting to OpenCode…")];
-  else if (conn.kind === "cli-not-found") {
-    content = [
-      h("h2", {}, "OpenCode CLI not found"),
-      h("p", {}, "Install OpenCode, or set “OpenCode Chat Sidebar: Executable Path” in Settings."),
-      h(
-        "details",
-        {},
-        h("summary", {}, "Locations searched"),
+  if (stage === "connecting") content = [h("p", { className: "muted" }, "Connecting to OpenCode…")];
+  else if (stage === "loading") {
+    if (transcript.items.length === 0)
+      content = [h("p", { className: "muted" }, "Checking OpenCode models and account…")];
+  } else if (stage === "ready") {
+    if (transcript.items.length === 0)
+      content = [
+        h("h2", {}, "Ask OpenCode anything"),
         h(
-          "ul",
-          { className: "small" },
-          ...conn.searched.slice(0, 30).map((p) => h("li", {}, h("code", {}, p))),
+          "p",
+          { className: "muted" },
+          "Context is explicit: only the files and selections you attach are sent along with your message.",
         ),
-      ),
-      h(
-        "div",
-        { className: "actions" },
-        h(
-          "button",
-          { className: "btn primary", onclick: () => send({ type: "configurePath" }) },
-          "Configure Path",
-        ),
-        h("button", { className: "btn", onclick: () => send({ type: "retry" }) }, "Retry"),
-      ),
-    ];
-  } else if (conn.kind === "not-running") {
-    content = [
-      h("h2", {}, "OpenCode is not running"),
-      h("p", {}, conn.detail),
-      h(
-        "div",
-        { className: "actions" },
-        conn.canStart
-          ? h(
-              "button",
-              { className: "btn primary", onclick: () => send({ type: "startOpenCode" }) },
-              "Start OpenCode",
-            )
-          : null,
-        h("button", { className: "btn", onclick: () => send({ type: "retry" }) }, "Retry"),
-      ),
-    ];
-  } else if (conn.kind === "error") {
-    content = [
-      h("h2", {}, "Could not connect to OpenCode"),
-      h("p", {}, conn.message),
-      h(
-        "div",
-        { className: "actions" },
-        h("button", { className: "btn primary", onclick: () => send({ type: "retry" }) }, "Retry"),
-        h("button", { className: "btn", onclick: () => send({ type: "showLogs" }) }, "Show Logs"),
-      ),
-    ];
-  } else if (!s.workspace.active) {
-    content = [h("h2", {}, "No folder open"), h("p", {}, "Open a folder to work with OpenCode.")];
-  } else if (transcript.items.length === 0) {
-    content = [
-      h("h2", {}, "Ask OpenCode anything"),
-      h(
-        "p",
-        { className: "muted" },
-        "Context is explicit: only the files and selections you attach are sent along with your message.",
-      ),
-    ];
-  }
+      ];
+  } else content = [renderOnboarding(s)];
   emptyEl.replaceChildren(...nonNull(content));
   emptyEl.hidden = content.length === 0;
+}
+
+// -------------------------------------------------------------- onboarding
+
+const STAGE_STATUS: Record<OnboardingStage, string> = {
+  connecting: "Connecting…",
+  "not-installed": "OpenCode not installed",
+  stopped: "OpenCode stopped",
+  error: "Not connected",
+  "no-folder": "No folder open",
+  loading: "Checking…",
+  "sign-in": "Sign-in required",
+  "sign-in-expired": "Sign-in required",
+  "no-models": "No models",
+  "catalog-error": "Models unavailable",
+  ready: "Connected",
+};
+
+const CHECK_MARK: Record<CheckState, string> = {
+  done: "✓",
+  todo: "○",
+  optional: "–",
+  expired: "!",
+  unknown: "…",
+};
+const CHECK_TEXT: Record<CheckState, string> = {
+  done: "done",
+  todo: "not yet",
+  optional: "optional",
+  expired: "needs renewal",
+  unknown: "not checked yet",
+};
+
+function checklist(s: ViewState): HTMLElement {
+  const c = s.onboarding.checklist;
+  const row = (label: string, state: CheckState, note?: string) =>
+    h(
+      "li",
+      {
+        className: `setup-check setup-${state}`,
+        "data-check": state,
+        "aria-label": `${label}: ${CHECK_TEXT[state]}`,
+      },
+      h("span", { className: "setup-mark", "aria-hidden": "true" }, CHECK_MARK[state]),
+      h("span", {}, label),
+      note ? h("span", { className: "muted small" }, ` ${note}`) : null,
+    );
+  return h(
+    "ul",
+    { className: "checklist", "aria-label": "Setup checklist", "data-testid": "onboarding-checklist" },
+    row("Extension installed", "done"),
+    row("OpenCode installed", c.installed),
+    row("OpenCode connected", c.connected),
+    row("Account signed in", c.account, c.account === "optional" ? "(optional)" : undefined),
+    row("Models available", c.models),
+  );
+}
+
+function actionBtn(label: string, msg: WebviewMessage, primary = false, testid?: string): HTMLElement {
+  return h(
+    "button",
+    { className: primary ? "btn primary" : "btn", onclick: () => send(msg), "data-testid": testid },
+    label,
+  );
+}
+
+function linkBtn(label: string, link: OfficialLink): HTMLElement {
+  return h(
+    "button",
+    { className: "link-btn", onclick: () => send({ type: "openOfficial", link }), "data-link": link },
+    label,
+  );
+}
+
+function renderOnboarding(s: ViewState): HTMLElement {
+  const ob = s.onboarding;
+  const conn = s.connection;
+  const signInButtons = (primary: boolean) =>
+    ob.signIn === "waiting"
+      ? [actionBtn("Check again", { type: "refreshConnection" }, primary, "onb-refresh")]
+      : [
+          actionBtn("Sign in to OpenCode", { type: "signIn" }, primary, "onb-sign-in"),
+          actionBtn("Refresh", { type: "refreshConnection" }, false, "onb-refresh"),
+        ];
+  let title = "";
+  let body: Array<Node | string> = [];
+  let actions: HTMLElement[] = [];
+  let extra: Array<Node | null> = [];
+  switch (ob.stage) {
+    case "not-installed":
+      title = "OpenCode is required";
+      body = ["OpenCode Chat Sidebar is a UI for OpenCode and requires OpenCode to be installed."];
+      actions = [
+        actionBtn("Install OpenCode", { type: "openOfficial", link: "install" }, true, "onb-install"),
+        actionBtn("Check again", { type: "retry" }, false, "onb-check"),
+        actionBtn("Set Path…", { type: "configurePath" }),
+      ];
+      if (conn.kind === "cli-not-found")
+        extra = [
+          h(
+            "details",
+            {},
+            h("summary", { className: "small" }, "Locations searched"),
+            h(
+              "ul",
+              { className: "small" },
+              ...conn.searched.slice(0, 30).map((p) => h("li", {}, h("code", {}, p))),
+            ),
+          ),
+        ];
+      break;
+    case "stopped": {
+      const canStart = conn.kind === "not-running" && conn.canStart;
+      title = "OpenCode is installed";
+      body = [
+        canStart
+          ? "Its background service is not running. Start it to continue."
+          : conn.kind === "not-running"
+            ? conn.detail
+            : "",
+      ];
+      actions = [
+        canStart ? actionBtn("Start OpenCode", { type: "startOpenCode" }, true, "onb-start") : null,
+        actionBtn("Check again", { type: "retry" }, !canStart, "onb-check"),
+      ].filter((x): x is HTMLElement => !!x);
+      break;
+    }
+    case "error":
+      title = "Could not connect to OpenCode";
+      body = [conn.kind === "error" ? conn.message : "OpenCode did not respond."];
+      actions = [
+        actionBtn("Retry", { type: "retry" }, true, "onb-check"),
+        actionBtn("Show Logs", { type: "showLogs" }),
+      ];
+      break;
+    case "no-folder":
+      title = "Open a project to start coding";
+      body = ["OpenCode works inside a folder. Open one to start a session."];
+      actions = [actionBtn("Open Folder", { type: "openFolder" }, true, "onb-open-folder")];
+      break;
+    case "sign-in":
+    case "sign-in-expired":
+      title = ob.stage === "sign-in" ? "Sign in to OpenCode" : "Sign-in needs to be renewed";
+      body = [
+        ob.stage === "sign-in"
+          ? "No models are available yet. Sign in to your OpenCode account, or connect another provider in OpenCode."
+          : "OpenCode reports that your OpenCode account sign-in has expired, and no models are available.",
+      ];
+      actions = [
+        ...signInButtons(true),
+        actionBtn("Connect another provider", { type: "connectProvider" }, false, "onb-provider"),
+      ];
+      extra = [
+        h(
+          "p",
+          { className: "muted small privacy-note" },
+          "Sign in using OpenCode. This extension never sees or stores your password.",
+        ),
+        h("p", { className: "small" }, linkBtn("Create or manage your OpenCode account", "account")),
+      ];
+      break;
+    case "no-models":
+      title = "No models are available yet.";
+      body = ["Configure a provider in OpenCode or use an OpenCode Go model."];
+      actions = [
+        actionBtn("Configure models", { type: "connectProvider" }, true, "onb-provider"),
+        actionBtn("Refresh", { type: "refreshConnection" }, false, "onb-refresh"),
+      ];
+      extra = [
+        h(
+          "p",
+          { className: "small links" },
+          linkBtn("Providers guide", "providers"),
+          " · ",
+          linkBtn("OpenCode Go", "go"),
+        ),
+      ];
+      break;
+    case "catalog-error":
+      title = "Models could not be loaded";
+      body = [
+        "OpenCode did not return its model list. It may still be starting, or a provider may be unreachable.",
+      ];
+      actions = [
+        actionBtn("Refresh", { type: "refreshConnection" }, true, "onb-refresh"),
+        actionBtn("Show Logs", { type: "showLogs" }),
+      ];
+      break;
+    default:
+      break;
+  }
+  const signInNote =
+    ob.signIn === "waiting"
+      ? h(
+          "p",
+          { className: "banner info", role: "status", "data-testid": "sign-in-waiting" },
+          "Waiting for sign-in — finish it in the OpenCode terminal and your browser. This view updates automatically.",
+        )
+      : ob.signIn === "cancelled"
+        ? h(
+            "p",
+            { className: "banner warn", role: "status" },
+            "Sign-in was not completed. You can try again.",
+          )
+        : ob.signIn === "failed"
+          ? h(
+              "p",
+              { className: "banner warn", role: "status" },
+              "OpenCode could not complete the sign-in. Check the terminal for details, then try again.",
+            )
+          : null;
+  return h(
+    "div",
+    { className: "onboarding", "data-stage": ob.stage, "data-testid": "onboarding" },
+    h("h2", {}, title),
+    ...body.map((b) => h("p", {}, b)),
+    signInNote,
+    h("div", { className: "actions" }, ...actions),
+    ...nonNull(extra),
+    checklist(s),
+    h("p", { className: "small muted help" }, "Need help? ", linkBtn("View setup guide", "setupGuide")),
+  );
 }
 
 // -------------------------------------------------------------- transcript
@@ -1781,8 +2013,14 @@ function renderComposer(s: ViewState) {
     ),
   );
   chipsEl.hidden = s.attachments.length === 0;
-  const connected = s.connection.kind === "connected" && !!s.workspace.active;
+  // The composer works only when the chat is usable (connected, folder open, models available).
+  const connected = s.connection.kind === "connected" && s.onboarding.stage === "ready";
   input.disabled = !connected;
+  input.placeholder = connected
+    ? "Ask anything…  (Enter to send, Shift+Enter for newline)"
+    : s.onboarding.stage === "connecting" || s.onboarding.stage === "loading"
+      ? "Connecting to OpenCode…"
+      : "Finish the setup above to start chatting";
   for (const b of [contextBtn, currentFileBtn, selectionBtn]) b.disabled = !connected;
   stopBtn.hidden = !s.busy;
   stopBtn.disabled = s.stopping;

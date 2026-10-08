@@ -2,7 +2,7 @@
   "name": "opencode-chat-sidebar",
   "displayName": "OpenCode Chat Sidebar GWS",
   "description": "A focused chat sidebar for OpenCode agents in VS Code.",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "publisher": "GlobalWebSolutions",
   "private": true,
   "license": "MIT",
@@ -40,7 +40,9 @@
     "llm"
   ],
   "main": "./dist/extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "extensionKind": [
     "workspace"
   ],
@@ -56,7 +58,7 @@
       "activitybar": [
         {
           "id": "opencodeSidebar",
-          "title": "OpenCode",
+          "title": "OpenCode Chat Sidebar",
           "icon": "media/activity.svg"
         }
       ]
@@ -74,6 +76,17 @@
       {
         "command": "opencodeSidebar.focusChat",
         "title": "Focus Chat",
+        "category": "OpenCode Chat Sidebar"
+      },
+      {
+        "command": "opencodeSidebar.refreshConnection",
+        "title": "Refresh Connection",
+        "category": "OpenCode Chat Sidebar",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "opencodeSidebar.signIn",
+        "title": "Sign in to OpenCode",
         "category": "OpenCode Chat Sidebar"
       },
       {
@@ -103,7 +116,12 @@
         {
           "command": "opencodeSidebar.newSession",
           "when": "view == opencodeSidebar.chat",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "opencodeSidebar.refreshConnection",
+          "when": "view == opencodeSidebar.chat",
+          "group": "navigation@2"
         }
       ],
       "editor/context": [
@@ -114,6 +132,13 @@
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "opencodeSidebar.focusChat",
+        "key": "cmd+alt+o",
+        "when": "isMac"
+      }
+    ],
     "configuration": {
       "title": "OpenCode Chat Sidebar",
       "properties": {
@@ -154,6 +179,11 @@
           "type": "boolean",
           "default": true,
           "markdownDescription": "Show context-window and cost figures reported by OpenCode."
+        },
+        "opencodeSidebar.showStatusBarItem": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show an **OpenCode** item in the Status Bar that opens the chat and shows the connection state."
         },
         "opencodeSidebar.budget.default": {
           "type": "string",

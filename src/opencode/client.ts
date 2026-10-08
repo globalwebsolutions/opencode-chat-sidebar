@@ -4,6 +4,7 @@
 
 import { parseForm } from "../core/forms";
 import type {
+  AccountStatus,
   AgentOption,
   FormAnswer,
   FormRequest,
@@ -60,6 +61,8 @@ export interface OpenCodeClient {
   listModels(directory: string): Promise<ModelOption[]>;
   defaultModel(directory: string): Promise<string | null>;
   listAgents(directory: string): Promise<AgentOption[]>;
+  /** Connection states from OpenCode's integration list; never labels or credentials. */
+  accountStatus(directory: string): Promise<AccountStatus>;
   listSessions(directory: string, limit: number): Promise<SessionSummary[]>;
   getSession(id: string): Promise<SessionSummary>;
   createSession(input: { directory: string; agent?: string; model?: ModelRef }): Promise<SessionSummary>;
@@ -131,6 +134,31 @@ export function toSessionSummary(raw: unknown): SessionSummary {
     outcome: outcome === "succeeded" || outcome === "failed" || outcome === "interrupted" ? outcome : null,
     cost: typeof d.cost === "number" ? d.cost : null,
   };
+}
+
+/** OpenCode's integration id for the OpenCode Console account (`opencode auth login opencode`). */
+export const OPENCODE_INTEGRATION = "opencode";
+
+/**
+ * Reduces `GET /api/integration` to connection states. Only `id`, `connections[].type` and
+ * `connections[].status.status` are read; labels, metadata and methods are ignored.
+ */
+export function parseAccountStatus(list: unknown): AccountStatus {
+  let opencode: AccountStatus["opencode"] = "none";
+  let otherProviders = false;
+  if (!Array.isArray(list)) throw new Error("Unexpected integration list");
+  for (const raw of list) {
+    const i = rec(raw);
+    const connections = Array.isArray(i.connections) ? i.connections : [];
+    const states = connections
+      .map((c) => rec(c))
+      .filter((c) => c.type === "credential" || c.type === "env")
+      .map((c) => (rec(c.status).status === "needs_auth" ? "needs-auth" : "ok"));
+    if (states.length === 0) continue;
+    if (i.id === OPENCODE_INTEGRATION) opencode = states.includes("ok") ? "connected" : "needs-auth";
+    else if (states.includes("ok")) otherProviders = true;
+  }
+  return { opencode, otherProviders };
 }
 
 /** Projects a model record onto the fields the UI needs (drops headers/body/settings, which may hold secrets). */
@@ -264,6 +292,11 @@ export class HttpOpenCodeClient implements OpenCodeClient {
       out.push({ id, name: str(r.name) ?? id });
     }
     return out;
+  }
+
+  async accountStatus(directory: string): Promise<AccountStatus> {
+    const d = rec(await this.request("GET", "/api/integration", { query: this.loc(directory) }));
+    return parseAccountStatus(d.data);
   }
 
   async listSessions(directory: string, limit: number): Promise<SessionSummary[]> {

@@ -12,6 +12,7 @@ import type {
   FormAnswer,
   InboxDelivery,
   ModelOption,
+  OnboardingView,
   PendingInboxItem,
   PermissionDecision,
   SessionSummary,
@@ -67,7 +68,13 @@ export interface ViewState {
     chars: number;
     lines: number;
   } | null;
+  /** First-run / connection guidance; `stage: "ready"` hides it. */
+  onboarding: OnboardingView;
 }
+
+/** Official OpenCode pages the webview may ask the host to open (keys, never URLs). */
+export type OfficialLink = "install" | "account" | "providers" | "go" | "setupGuide";
+const OFFICIAL_LINKS: OfficialLink[] = ["install", "account", "providers", "go", "setupGuide"];
 
 export type HostMessage =
   | { type: "state"; state: ViewState }
@@ -119,7 +126,13 @@ export type WebviewMessage =
   | { type: "startOpenCode" }
   | { type: "retry" }
   | { type: "configurePath" }
-  | { type: "showLogs" };
+  | { type: "showLogs" }
+  | { type: "signIn" }
+  | { type: "connectProvider" }
+  | { type: "refreshConnection" }
+  | { type: "openFolder" }
+  | { type: "openOfficial"; link: OfficialLink }
+  | { type: "dismissSignInHint" };
 
 const MAX_TEXT = 200_000;
 /** Code blocks copied from very long reports can be large; still bounded. */
@@ -192,6 +205,12 @@ const VALIDATORS: Record<WebviewMessage["type"], Validator> = {
   retry: () => true,
   configurePath: () => true,
   showLogs: () => true,
+  signIn: () => true,
+  connectProvider: () => true,
+  refreshConnection: () => true,
+  openFolder: () => true,
+  openOfficial: (m) => typeof m.link === "string" && (OFFICIAL_LINKS as string[]).includes(m.link),
+  dismissSignInHint: () => true,
 };
 
 const ALLOWED_KEYS: Partial<Record<WebviewMessage["type"], string[]>> = {
@@ -216,6 +235,7 @@ const ALLOWED_KEYS: Partial<Record<WebviewMessage["type"], string[]>> = {
   openAgentDiff: ["path"],
   copyTaskPrompt: ["requestId"],
   openLink: ["href"],
+  openOfficial: ["link"],
 };
 
 /** Returns a typed message, or undefined if the payload does not match the schema exactly. */

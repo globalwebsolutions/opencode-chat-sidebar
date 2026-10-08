@@ -5,12 +5,15 @@ import { describe, it } from "node:test";
 
 const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../package.json"), "utf8"));
 const keys = Object.keys(pkg.contributes.configuration.properties as Record<string, unknown>);
+const commands = (pkg.contributes.commands as Array<{ command: string; title: string }>).map(
+  (c) => c.command,
+);
 
 describe("extension manifest", () => {
   it("keeps the release identity", () => {
     assert.deepEqual(
       [pkg.name, pkg.publisher, pkg.displayName, pkg.version],
-      ["opencode-chat-sidebar", "GlobalWebSolutions", "OpenCode Chat Sidebar GWS", "0.2.4"],
+      ["opencode-chat-sidebar", "GlobalWebSolutions", "OpenCode Chat Sidebar GWS", "0.3.0"],
     );
   });
 
@@ -28,5 +31,41 @@ describe("extension manifest", () => {
       assert.equal(p.type, "boolean");
       assert.equal(p.default, true);
     }
+  });
+
+  it("contributes one Activity Bar container with one chat view (no duplicates)", () => {
+    const containers = pkg.contributes.viewsContainers.activitybar as Array<{ id: string; title: string }>;
+    assert.deepEqual(
+      containers.map((c) => [c.id, c.title]),
+      [["opencodeSidebar", "OpenCode Chat Sidebar"]],
+    );
+    assert.equal(Object.keys(pkg.contributes.views).length, 1);
+    assert.deepEqual(
+      pkg.contributes.views.opencodeSidebar.map((v: { id: string }) => v.id),
+      ["opencodeSidebar.chat"],
+    );
+  });
+
+  it("contributes Focus Chat, Refresh Connection and Sign in commands", () => {
+    for (const c of [
+      "opencodeSidebar.focusChat",
+      "opencodeSidebar.refreshConnection",
+      "opencodeSidebar.signIn",
+    ])
+      assert.ok(commands.includes(c), c);
+    assert.equal(new Set(commands).size, commands.length, "no duplicate commands");
+  });
+
+  it("binds only Focus Chat by default, on macOS only (Cmd+Alt+O is unbound in VS Code)", () => {
+    assert.deepEqual(pkg.contributes.keybindings, [
+      { command: "opencodeSidebar.focusChat", key: "cmd+alt+o", when: "isMac" },
+    ]);
+  });
+
+  it("activates after startup (for the Status Bar item) without a startup-blocking event", () => {
+    assert.deepEqual(pkg.activationEvents, ["onStartupFinished"]);
+    const p = pkg.contributes.configuration.properties["opencodeSidebar.showStatusBarItem"];
+    assert.equal(p.type, "boolean");
+    assert.equal(p.default, true);
   });
 });

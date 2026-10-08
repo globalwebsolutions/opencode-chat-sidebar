@@ -22,6 +22,8 @@ The extension declares `untrustedWorkspaces: { supported: false }`, so it is dis
 ## Credentials and logging
 
 - The extension stores no provider credentials and no OpenCode password. The service password is held in memory only and used in the `Authorization` header to the local service.
+- Sign-in is OpenCode's own: **Sign in to OpenCode** runs `opencode auth login` in a VS Code terminal, and OpenCode stores the result. The extension has no login form, never asks for passwords, emails, API keys or tokens, and never reads browser cookies.
+- Account state is read from OpenCode's integration list as connection states only. Connection labels and ids are discarded, and the credential API (`/api/credential`, which returns credential values) is never called.
 - Model records from OpenCode can include provider headers or request bodies. These are dropped as soon as they arrive and never reach the UI or the logs.
 - Logs (output channel **OpenCode Chat Sidebar**) leave out prompts, file contents and tool payloads. Authorization headers, passwords, tokens, API-key patterns and URL credentials are redacted. Provider errors are logged with type, HTTP status, provider, model and a redacted, length-limited message.
 

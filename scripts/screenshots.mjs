@@ -132,6 +132,12 @@ const base = (o = {}) => ({
   pending: [],
   locale: "en",
   showPlacementHint: false,
+  onboarding: {
+    stage: "ready",
+    checklist: { installed: "done", connected: "done", account: "done", models: "done" },
+    hint: null,
+    signIn: "idle",
+  },
   task: {
     id: "t",
     label: "current",
@@ -349,9 +355,33 @@ const scenes = {
     ],
   },
 };
+// First run: OpenCode is connected but has no account and no models yet.
+scenes["5-onboarding"] = {
+  state: base({
+    models: [],
+    selectedModel: null,
+    selectedVariant: null,
+    currentSession: null,
+    usage: null,
+    steps: 0,
+    task: null,
+    workspace: { ...base().workspace, branch: "main", uncommitted: 0 },
+    workspaceChanges: null,
+    budget: { ...base().budget, taskCost: null, taskSteps: 0 },
+    onboarding: {
+      stage: "sign-in",
+      checklist: { installed: "done", connected: "done", account: "todo", models: "todo" },
+      hint: null,
+      signIn: "idle",
+    },
+  }),
+  items: [],
+};
+// Optional filter: node scripts/screenshots.mjs 5-onboarding
+const only = process.argv.slice(2);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ocs-shots-"));
 const browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: ["--no-sandbox"] });
-for (const [name, scene] of Object.entries(scenes)) {
+for (const [name, scene] of Object.entries(scenes).filter(([n]) => !only.length || only.includes(n))) {
   const html = path.join(dir, `${name}.html`);
   fs.writeFileSync(
     html,

@@ -9,6 +9,45 @@ export type ConnectionStatus =
   | { kind: "cli-not-found"; searched: string[] }
   | { kind: "error"; message: string };
 
+/**
+ * Account / provider evidence from OpenCode's integration list. Only states and counts:
+ * connection labels (which may contain personal data) and credentials are never read.
+ */
+export interface AccountStatus {
+  /** OpenCode Console account (integration `opencode`). */
+  opencode: "connected" | "needs-auth" | "none";
+  /** Another provider (Anthropic, OpenAI, …) has a connection in OpenCode. */
+  otherProviders: boolean;
+}
+
+/** First-run / connection state of the sidebar, derived by `deriveOnboarding`. */
+export type OnboardingStage =
+  | "connecting"
+  | "not-installed"
+  | "stopped"
+  | "error"
+  | "no-folder"
+  | "loading"
+  | "sign-in"
+  | "sign-in-expired"
+  | "no-models"
+  | "catalog-error"
+  | "ready";
+
+/** Checklist item state: done, needs action, optional (not required to chat), or not known yet. */
+export type CheckState = "done" | "todo" | "optional" | "expired" | "unknown";
+
+export type SignInState = "idle" | "waiting" | "cancelled" | "failed";
+
+export interface OnboardingView {
+  stage: OnboardingStage;
+  checklist: { installed: CheckState; connected: CheckState; account: CheckState; models: CheckState };
+  /** Non-blocking note shown while ready. */
+  hint: "sign-in-optional" | "sign-in-expired" | null;
+  /** `opencode auth login` in a VS Code terminal: running, or how the last attempt ended. */
+  signIn: SignInState;
+}
+
 export type RepoKind = "local" | "worktree" | "not-git" | "unknown";
 
 export interface WorkspaceFolderInfo {

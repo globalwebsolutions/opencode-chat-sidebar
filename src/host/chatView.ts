@@ -10,10 +10,19 @@ import { discoverExecutable } from "../core/cliDiscovery";
 import { chipFor, validateSelection } from "../core/context";
 import { classifyPath } from "../core/sensitive";
 import { decideNotification, type TaskNotice } from "../core/currentTask";
+import { deriveOnboarding, OPENCODE_LINKS, statusBarText } from "../core/onboarding";
 import { SessionController } from "../core/sessionController";
 import { HttpOpenCodeClient, type EventSubscription } from "../opencode/client";
 import { discoverServer, startService } from "../opencode/service";
-import type { BudgetLevel, ConnectionStatus, ContextAttachment, UiEvent } from "../shared/model";
+import type {
+  AccountStatus,
+  BudgetLevel,
+  ConnectionStatus,
+  ContextAttachment,
+  OnboardingView,
+  SignInState,
+  UiEvent,
+} from "../shared/model";
 import {
   parseWebviewMessage,
   type HostMessage,
@@ -26,7 +35,12 @@ import type { Logger } from "./log";
 import { WorkspaceTracker } from "./workspace";
 
 export const VIEW_ID = "opencodeSidebar.chat";
+/** The one command every entry point uses to open the chat. */
+export const FOCUS_COMMAND = "opencodeSidebar.focusChat";
 const HINT_KEY = "opencodeSidebar.placementHintDismissed";
+const SIGN_IN_HINT_KEY = "opencodeSidebar.signInHintDismissed";
+const SIGN_IN_POLL_MS = 3000;
+const SIGN_IN_MAX_MS = 15 * 60_000;
 
 function uiLocale(): "en" | "ar" {
   return vscode.env.language.toLowerCase().startsWith("ar") ? "ar" : "en";
@@ -55,6 +69,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private readonly workspace: WorkspaceTracker;
   private readonly disposables: vscode.Disposable[] = [];
   private readonly taps = new Set<(events: UiEvent[]) => void>();
+  private readonly statusItem: vscode.StatusBarItem;
+  private focusPending = false;
+  private signInState: SignInState = "idle";
+  private signInTerminal: vscode.Terminal | undefined;
+  private signInTimer: ReturnType<typeof setInterval> | undefined;
+  private signInStarted = 0;
+  private signInBaseline: string | null = null;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -62,6 +83,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   ) {
     this.workspace = new WorkspaceTracker(context.workspaceState);
     this.disposables.push(this.workspace);
+    // Status Bar shortcut to the chat. It stays neutral until the sidebar has connected.
+    this.statusItem = vscode.window.createStatusBarItem(
+      "opencodeSidebar.status",
+      vscode.StatusBarAlignment.Right,
+      100,
+    );
+    this.statusItem.name = "OpenCode Chat Sidebar";
+    this.statusItem.command = FOCUS_COMMAND;
+    this.disposables.push(this.statusItem);
+    this.updateStatusBar(null);
+    this.disposables.push(
+      vscode.window.onDidCloseTerminal((t) => {
+        if (t === this.signInTerminal) void this.finishSignIn(t);
+      }),
+    );
     this.disposables.push(
       this.workspace.onDidChange((info) => {
         // Branch / Git status updates also fire this event; only a different folder reloads.
@@ -80,6 +116,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         ) {
           void this.reconnect();
         } else this.postState();
+        if (e.affectsConfiguration(`${CONFIG_SECTION}.showStatusBarItem`))
+          this.updateStatusBar(this.lastStage);
       }),
     );
   }
@@ -94,6 +132,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     view.webview.options = { enableScripts: true, localResourceRoots: [distRoot, mediaRoot] };
     view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage((raw) => void this.onMessage(raw), undefined, this.disposables);
+    view.onDidChangeVisibility(() => {
+      if (view.visible && this.focusPending) this.post({ type: "focusInput" });
+    });
     view.onDidDispose(() => {
       this.view = undefined;
       this.webviewReady = false;
@@ -137,7 +178,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (this.stateTimer) return;
     this.stateTimer = setTimeout(() => {
       this.stateTimer = undefined;
-      this.post({ type: "state", state: this.viewState() });
+      const state = this.viewState();
+      this.updateStatusBar(state.onboarding.stage);
+      this.post({ type: "state", state });
     }, 16);
   }
 
@@ -188,7 +231,44 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       locale: uiLocale(),
       showPlacementHint: !this.context.globalState.get<boolean>(HINT_KEY, false),
       task: c?.taskView() ?? null,
+      onboarding: this.onboarding(),
     };
+  }
+
+  private onboarding(): OnboardingView {
+    const c = this.controller;
+    return deriveOnboarding({
+      connection: this.connection,
+      hasFolder: !!this.workspace.current.active,
+      catalogLoaded: c?.catalogLoaded ?? false,
+      catalogLoading: c?.catalogLoading ?? false,
+      models: c?.models ?? null,
+      account: c?.account ?? null,
+      signIn: this.signInState,
+      hintDismissed: this.context.globalState.get<boolean>(SIGN_IN_HINT_KEY, false),
+    });
+  }
+
+  private lastStage: OnboardingView["stage"] | null = null;
+
+  private updateStatusBar(stage: OnboardingView["stage"] | null): void {
+    this.lastStage = stage;
+    if (!readConfig().showStatusBarItem) {
+      this.statusItem.hide();
+      return;
+    }
+    const text = statusBarText(stage);
+    this.statusItem.text = `$(comment-discussion) ${text}`;
+    this.statusItem.tooltip = `OpenCode Chat Sidebar — ${text === "OpenCode Chat" ? "open the chat" : text}. Click to open the chat.`;
+    this.statusItem.accessibilityInformation = {
+      label: `${text}. Open OpenCode Chat Sidebar`,
+      role: "button",
+    };
+    this.statusItem.backgroundColor =
+      stage === "sign-in" || stage === "sign-in-expired" || stage === "not-installed"
+        ? new vscode.ThemeColor("statusBarItem.warningBackground")
+        : undefined;
+    this.statusItem.show();
   }
 
   // ------------------------------------------------------- connection
@@ -203,7 +283,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.postState();
   }
 
+  private reconnectGeneration = 0;
+
+  /** Drops the current connection and connects again with the current settings. */
   private async reconnect(): Promise<void> {
+    const generation = ++this.reconnectGeneration;
+    // A connect still in flight read older settings: let it finish, then start over. Several
+    // quick changes (e.g. two settings) collapse into one reconnect with the latest values.
+    if (this.connecting) await this.connecting.catch(() => undefined);
+    if (generation !== this.reconnectGeneration) return;
     this.teardown();
     await this.connect();
   }
@@ -357,9 +445,118 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   // ---------------------------------------------------------- commands
 
+  /** Reveals the chat view (wherever the user moved it) and focuses the message box. */
   async focus(): Promise<void> {
+    this.focusPending = !(this.view && this.webviewReady);
     await vscode.commands.executeCommand(`${VIEW_ID}.focus`);
     this.post({ type: "focusInput" });
+  }
+
+  /** Re-checks the service, account, providers, models and agents without reloading the window. */
+  async refreshConnection(): Promise<void> {
+    const c = this.controller;
+    if (!c || this.connection.kind !== "connected") {
+      await this.reconnect();
+      return;
+    }
+    await Promise.all([c.refreshCatalog(), c.refreshSessions()]);
+    // Nothing answered: the service probably went away, so rediscover it.
+    if (this.controller === c && c.directory && c.models === null && c.account === null)
+      await this.reconnect();
+  }
+
+  /**
+   * Runs OpenCode's own sign-in (`opencode auth login`) in a VS Code terminal. The extension
+   * never sees the credentials: OpenCode stores them. "account" uses the OpenCode Console
+   * device flow; "provider" opens OpenCode's provider picker.
+   */
+  async signIn(target: "account" | "provider" = "account"): Promise<void> {
+    const cli = this.findCli();
+    if (!cli.found) {
+      this.setConnection({ kind: "cli-not-found", searched: cli.searched });
+      return;
+    }
+    if (this.signInTerminal && this.signInTerminal.exitStatus === undefined) {
+      try {
+        this.signInTerminal.show();
+        return;
+      } catch {
+        // Closed a moment ago (the close event has not arrived yet): start a new sign-in.
+        this.signInTerminal = undefined;
+      }
+    }
+    const args = ["auth", "login"];
+    if (target === "account") args.push("opencode", "--method", "device");
+    // A server chosen in settings is used for the login too; otherwise the background service.
+    if (readConfig().serverUrl.trim() && this.connection.kind === "connected")
+      args.push("--server", this.connection.url);
+    this.log.info(`Starting sign-in: opencode ${args.join(" ")}`);
+    const terminal = vscode.window.createTerminal({
+      name: target === "account" ? "OpenCode Sign In" : "OpenCode Providers",
+      shellPath: cli.path,
+      shellArgs: args,
+      iconPath: new vscode.ThemeIcon("account"),
+      message: "Sign in using OpenCode. OpenCode Chat Sidebar never sees or stores your password or keys.",
+    });
+    this.signInTerminal = terminal;
+    this.signInStarted = Date.now();
+    this.signInBaseline = accountKey(this.controller?.account ?? null, this.controller?.models?.length);
+    this.signInState = "waiting";
+    terminal.show();
+    clearInterval(this.signInTimer);
+    this.signInTimer = setInterval(() => void this.pollSignIn(terminal), SIGN_IN_POLL_MS);
+    this.postState();
+  }
+
+  private async pollSignIn(terminal: vscode.Terminal): Promise<void> {
+    if (terminal !== this.signInTerminal) return;
+    if (terminal.exitStatus !== undefined) return this.finishSignIn(terminal);
+    if (Date.now() - this.signInStarted > SIGN_IN_MAX_MS) {
+      this.endSignInWait("idle");
+      return;
+    }
+    // OpenCode also emits integration/provider events, which refresh the catalog; polling is a fallback.
+    const c = this.controller;
+    if (!c) return;
+    await c.refreshCatalog();
+    if (this.signInChanged()) this.endSignInWait("idle");
+  }
+
+  private async finishSignIn(terminal: vscode.Terminal): Promise<void> {
+    if (terminal !== this.signInTerminal) return;
+    const status = terminal.exitStatus;
+    // Closed by the user (or VS Code) rather than OpenCode finishing: treat as cancelled.
+    const closed = !status || status.reason !== vscode.TerminalExitReason.Process;
+    const code = status?.code;
+    this.signInTerminal = undefined;
+    clearInterval(this.signInTimer);
+    if (this.controller) await this.controller.refreshCatalog();
+    else await this.reconnect();
+    if (this.signInChanged() || (!closed && code === 0)) this.endSignInWait("idle");
+    // 129/130/143: hang-up, Ctrl+C, terminate.
+    else if (closed || code === undefined || code === 129 || code === 130 || code === 143)
+      this.endSignInWait("cancelled");
+    else {
+      this.log.warn(`opencode auth login exited with code ${code}`);
+      this.endSignInWait("failed");
+    }
+  }
+
+  private signInChanged(): boolean {
+    const c = this.controller;
+    return !!c && accountKey(c.account, c.models?.length) !== this.signInBaseline;
+  }
+
+  private endSignInWait(state: SignInState): void {
+    clearInterval(this.signInTimer);
+    this.signInTimer = undefined;
+    this.signInState = state;
+    this.postState();
+  }
+
+  private async openFolder(): Promise<void> {
+    // Native "Open Folder…" dialog.
+    await vscode.commands.executeCommand("vscode.openFolder");
   }
 
   async newSession(): Promise<void> {
@@ -529,6 +726,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.webviewReady = true;
         this.post({ type: "transcript", items: c?.transcript.items ?? [] });
         this.post({ type: "state", state: this.viewState() });
+        if (this.focusPending) {
+          this.focusPending = false;
+          this.post({ type: "focusInput" });
+        }
         return;
       case "send": {
         if (!c) return;
@@ -659,6 +860,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
       case "showLogs":
         this.log.show();
         return;
+      case "signIn":
+        return this.signIn("account");
+      case "connectProvider":
+        return this.signIn("provider");
+      case "refreshConnection":
+        if (this.signInState === "cancelled" || this.signInState === "failed") this.signInState = "idle";
+        return this.refreshConnection();
+      case "openFolder":
+        return this.openFolder();
+      case "openOfficial":
+        await vscode.env.openExternal(vscode.Uri.parse(OPENCODE_LINKS[msg.link]));
+        return;
+      case "dismissSignInHint":
+        await this.context.globalState.update(SIGN_IN_HINT_KEY, true);
+        this.postState();
+        return;
     }
   }
 
@@ -671,7 +888,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (!decision.show) return;
     this.log.info(`Notification (${notice.kind}) shown`);
     const choice = await this.notifier(decision.severity, decision.message, ["Open Chat"]);
-    if (choice === "Open Chat") await this.focus();
+    if (choice === "Open Chat") await vscode.commands.executeCommand(FOCUS_COMMAND);
   }
 
   /** Replaceable for tests; defaults to VS Code's native notifications. */
@@ -770,6 +987,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   }
 
   dispose(): void {
+    clearInterval(this.signInTimer);
     this.teardown();
     clearTimeout(this.flushTimer);
     clearTimeout(this.stateTimer);
@@ -790,10 +1008,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         this.notifier = fn;
       },
       viewVisible: () => !!this.view?.visible,
+      statusBar: () => ({
+        text: this.statusItem.text,
+        tooltip: String(this.statusItem.tooltip ?? ""),
+        command: this.statusItem.command,
+      }),
+      signInState: () => this.signInState,
+      focusPending: () => this.focusPending,
       tap: (fn: (events: UiEvent[]) => void) => {
         this.taps.add(fn);
         return { dispose: () => this.taps.delete(fn) };
       },
     };
   }
+}
+
+/** Fingerprint of the connection evidence, used to notice when a sign-in completed. */
+function accountKey(account: AccountStatus | null, modelCount: number | undefined): string | null {
+  return account ? `${account.opencode}:${account.otherProviders}:${modelCount ?? -1}` : null;
 }

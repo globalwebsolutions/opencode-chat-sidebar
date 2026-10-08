@@ -105,6 +105,12 @@ export function baseState(over: Partial<ViewState> = {}): ViewState {
     locale: "en",
     showPlacementHint: false,
     task: null,
+    onboarding: {
+      stage: "ready",
+      checklist: { installed: "done", connected: "done", account: "done", models: "done" },
+      hint: null,
+      signIn: "idle",
+    },
     ...over,
   };
 }
@@ -778,6 +784,216 @@ describe(
         path: path.join(ROOT, "out-test", "screens", "high-contrast.png"),
         fullPage: true,
       });
+    });
+    // ------------------------------------------------------------ v0.3 onboarding
+
+    const onb = (
+      stage: ViewState["onboarding"]["stage"],
+      over: Partial<ViewState["onboarding"]> = {},
+    ): ViewState["onboarding"] => ({
+      stage,
+      checklist: { installed: "done", connected: "done", account: "unknown", models: "unknown" },
+      hint: null,
+      signIn: "idle",
+      ...over,
+    });
+    const status = () => text('[data-testid="connection-status"]');
+    const checks = () =>
+      page.$$eval("[data-check]", (els) => els.map((e) => (e as HTMLElement).getAttribute("aria-label")));
+
+    it("onboarding A: OpenCode not installed → Install (official page) / Check again, chat disabled", async () => {
+      await host({
+        type: "state",
+        state: baseState({
+          connection: { kind: "cli-not-found", searched: ["/usr/local/bin/opencode"] },
+          models: null,
+          agents: null,
+          currentSession: null,
+          onboarding: onb("not-installed", {
+            checklist: { installed: "todo", connected: "todo", account: "unknown", models: "unknown" },
+          }),
+        }),
+      });
+      const card = await text('[data-testid="onboarding"]');
+      assert.match(card, /OpenCode is required/);
+      assert.match(
+        card,
+        /OpenCode Chat Sidebar is a UI for OpenCode and requires OpenCode to be installed\./,
+      );
+      assert.equal(await status(), "OpenCode not installed");
+      assert.deepEqual(await checks(), [
+        "Extension installed: done",
+        "OpenCode installed: not yet",
+        "OpenCode connected: not yet",
+        "Account signed in: not checked yet",
+        "Models available: not checked yet",
+      ]);
+      await clearSent();
+      await page.click('[data-testid="onb-install"]');
+      await page.click('[data-testid="onb-check"]');
+      assert.deepEqual(
+        (await sent()).map((m) => m),
+        [{ type: "openOfficial", link: "install" }, { type: "retry" }],
+      );
+      assert.equal(await page.$eval("textarea", (t) => (t as HTMLTextAreaElement).disabled), true);
+    });
+
+    it("onboarding B: service stopped → Start OpenCode", async () => {
+      await host({
+        type: "state",
+        state: baseState({
+          connection: { kind: "not-running", canStart: true, detail: "not running" },
+          onboarding: onb("stopped", {
+            checklist: { installed: "done", connected: "todo", account: "unknown", models: "unknown" },
+          }),
+        }),
+      });
+      assert.match(await text('[data-testid="onboarding"]'), /OpenCode is installed/);
+      assert.equal(await status(), "OpenCode stopped");
+      await clearSent();
+      await page.click('[data-testid="onb-start"]');
+      assert.deepEqual(await lastSent("startOpenCode"), { type: "startOpenCode" });
+    });
+
+    it("onboarding C: sign-in uses OpenCode's flow, states the privacy promise, asks for no credentials", async () => {
+      await host({
+        type: "state",
+        state: baseState({
+          models: [],
+          selectedModel: null,
+          onboarding: onb("sign-in", {
+            checklist: { installed: "done", connected: "done", account: "todo", models: "todo" },
+          }),
+        }),
+      });
+      const card = await text('[data-testid="onboarding"]');
+      assert.match(card, /Sign in using OpenCode\. This extension never sees or stores your password\./);
+      assert.equal(await status(), "Sign-in required");
+      assert.equal(await page.$$eval('[data-testid="onboarding"] input', (els) => els.length), 0);
+      assert.equal(await page.$$eval('input[type="password"]', (els) => els.length), 0);
+      await clearSent();
+      await page.click('[data-testid="onb-sign-in"]');
+      await page.click('[data-link="account"]');
+      await page.click('[data-testid="onb-provider"]');
+      assert.deepEqual(await sent(), [
+        { type: "signIn" },
+        { type: "openOfficial", link: "account" },
+        { type: "connectProvider" },
+      ]);
+      assert.equal(await page.$eval("textarea", (t) => (t as HTMLTextAreaElement).disabled), true);
+    });
+
+    it("onboarding: waiting / cancelled / failed sign-in feedback", async () => {
+      const st = (signIn: ViewState["onboarding"]["signIn"]) =>
+        baseState({ models: [], onboarding: onb("sign-in", { signIn }) });
+      await host({ type: "state", state: st("waiting") });
+      assert.match(await text('[data-testid="sign-in-waiting"]'), /finish it in the OpenCode terminal/);
+      assert.equal(await page.$('[data-testid="onb-sign-in"]'), null, "no second sign-in while waiting");
+      await host({ type: "state", state: st("cancelled") });
+      assert.match(await text('[data-testid="onboarding"]'), /Sign-in was not completed/);
+      await host({ type: "state", state: st("failed") });
+      assert.match(await text('[data-testid="onboarding"]'), /could not complete the sign-in/);
+    });
+
+    it("onboarding D: no models → exact guidance, Configure models / Refresh, docs links", async () => {
+      await host({
+        type: "state",
+        state: baseState({
+          models: [],
+          selectedModel: null,
+          onboarding: onb("no-models", {
+            checklist: { installed: "done", connected: "done", account: "done", models: "todo" },
+          }),
+        }),
+      });
+      const card = await text('[data-testid="onboarding"]');
+      assert.match(card, /No models are available yet\./);
+      assert.match(card, /Configure a provider in OpenCode or use an OpenCode Go model\./);
+      assert.equal(await status(), "No models");
+      assert.equal(await text("#model-select"), "No models — connect a provider");
+      await clearSent();
+      await page.click('[data-testid="onb-provider"]');
+      await page.click('[data-testid="onb-refresh"]');
+      await page.click('[data-link="providers"]');
+      await page.click('[data-link="go"]');
+      assert.deepEqual(await sent(), [
+        { type: "connectProvider" },
+        { type: "refreshConnection" },
+        { type: "openOfficial", link: "providers" },
+        { type: "openOfficial", link: "go" },
+      ]);
+    });
+
+    it("onboarding F: no folder → Open Folder; selectors explain why they are empty", async () => {
+      await host({
+        type: "state",
+        state: baseState({
+          workspace: { ...baseState().workspace, active: null, folders: [] },
+          models: null,
+          agents: null,
+          onboarding: onb("no-folder"),
+        }),
+      });
+      assert.match(await text('[data-testid="onboarding"]'), /Open a project to start coding/);
+      assert.equal(await status(), "No folder open");
+      assert.equal(await text("#model-select"), "Open a folder first");
+      assert.equal(await text("#agent-select"), "Open a folder first");
+      await clearSent();
+      await page.click('[data-testid="onb-open-folder"]');
+      assert.deepEqual(await sent(), [{ type: "openFolder" }]);
+    });
+
+    it("onboarding E: ready hides onboarding; header says Connected only then", async () => {
+      assert.equal(await page.$('[data-testid="onboarding"]'), null);
+      assert.equal(await page.$('[data-testid="sign-in-hint"]'), null);
+      assert.equal(await status(), "Connected");
+      assert.equal(await page.$eval("textarea", (t) => (t as HTMLTextAreaElement).disabled), false);
+      await host({ type: "state", state: baseState({ models: null, onboarding: onb("loading") }) });
+      assert.equal(await status(), "Checking…");
+      assert.equal(await text("#model-select"), "Loading models…");
+      await host({
+        type: "state",
+        state: baseState({ models: null, agents: null, onboarding: onb("catalog-error") }),
+      });
+      assert.equal(await status(), "Models unavailable");
+      assert.equal(await text("#agent-select"), "Agents could not be loaded");
+      await host({ type: "state", state: baseState({ agents: [] }) });
+      assert.equal(await text("#agent-select"), "No agents available");
+    });
+
+    it("onboarding: optional sign-in note while using free models, dismissible; renewal note", async () => {
+      await host({
+        type: "state",
+        state: baseState({ onboarding: onb("ready", { hint: "sign-in-optional" }) }),
+      });
+      assert.match(await text('[data-testid="sign-in-hint"]'), /No OpenCode account is connected/);
+      assert.equal(await page.$('[data-testid="onboarding"]'), null, "never blocks a usable chat");
+      await clearSent();
+      await page.click('[data-testid="sign-in-hint"] .btn.subtle');
+      await page.click('[data-testid="sign-in-hint"] .btn:not(.subtle)');
+      assert.deepEqual(await sent(), [{ type: "dismissSignInHint" }, { type: "signIn" }]);
+      await host({
+        type: "state",
+        state: baseState({ onboarding: onb("ready", { hint: "sign-in-expired" }) }),
+      });
+      assert.match(await text('[data-testid="sign-in-hint"]'), /needs to be renewed/);
+      assert.equal(await page.$('[data-testid="sign-in-hint"] .btn.subtle'), null);
+    });
+
+    it("onboarding: setup guide link and a compact card without horizontal overflow at 260px", async () => {
+      await page.setViewport({ width: 260, height: 700 });
+      await host({
+        type: "state",
+        state: baseState({ models: [], onboarding: onb("sign-in") }),
+      });
+      assert.match(await text('[data-testid="onboarding"]'), /Need help\? View setup guide/);
+      await clearSent();
+      await page.click('[data-link="setupGuide"]');
+      assert.deepEqual(await sent(), [{ type: "openOfficial", link: "setupGuide" }]);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      assert.ok(overflow <= 0, `horizontal overflow ${overflow}px`);
     });
   },
 );

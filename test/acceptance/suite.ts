@@ -23,6 +23,9 @@ interface TestApi {
     fn: (severity: string, message: string, actions: string[]) => Thenable<string | undefined>,
   ): void;
   viewVisible(): boolean;
+  statusBar(): { text: string; tooltip: string; command: unknown };
+  signInState(): string;
+  focusPending(): boolean;
 }
 
 const MODEL = process.env.ACCEPT_MODEL ?? "opencode-go/kimi-k2.7-code";
@@ -1082,6 +1085,390 @@ async function worktree(api: TestApi): Promise<void> {
   check("Worktree branch", ws.branch === "feature/wt", String(ws.branch));
 }
 
+// ------------------------------------------------------- v0.3 onboarding (A–G)
+
+const CLI = process.env.ACCEPT_CLI ?? "";
+const FREE_URL = process.env.ACCEPT_FREE_URL ?? "";
+const BARE_URL = process.env.ACCEPT_BARE_URL ?? "";
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const stage = (api: TestApi) => api.viewState().onboarding.stage;
+const settings = () => vscode.workspace.getConfiguration("opencodeSidebar");
+
+async function openChat(api: TestApi): Promise<void> {
+  await vscode.commands.executeCommand("opencodeSidebar.focusChat");
+  await api.ensureStarted();
+}
+
+async function waitStage(api: TestApi, want: string, timeoutMs = 60_000): Promise<void> {
+  await waitFor(`stage ${want}`, () => stage(api) === want, timeoutMs).catch((e: Error) => {
+    const c = api.controller();
+    throw new Error(
+      `${e.message}; now ${stage(api)} account=${JSON.stringify(c?.account)} models=${c?.models?.length} loading=${c?.catalogLoading} signIn=${api.signInState()}`,
+    );
+  });
+}
+
+/** Adds a key credential on an ISOLATED test server through OpenCode's own API (never the real service). */
+async function connectTestKey(serverUrl: string, integration: string, key: string): Promise<void> {
+  if (!serverUrl || serverUrl === "" || !/^http:\/\/127\.0\.0\.1:/.test(serverUrl))
+    throw new Error("isolated server only");
+  const auth =
+    "Basic " + Buffer.from("opencode:" + (process.env.OPENCODE_SERVER_PASSWORD ?? "")).toString("base64");
+  const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+  const res = await fetch(
+    `${serverUrl}/api/integration/${integration}/connect/key?location%5Bdirectory%5D=${encodeURIComponent(dir)}`,
+    {
+      method: "POST",
+      headers: { authorization: auth, "content-type": "application/json" },
+      body: JSON.stringify({ key }),
+    },
+  );
+  if (!res.ok)
+    throw new Error(`connect ${integration}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+}
+
+function terminalNamed(name: string): vscode.Terminal[] {
+  return vscode.window.terminals.filter((t) => t.name === name);
+}
+
+async function onbMissing(api: TestApi): Promise<void> {
+  await openChat(api);
+  await waitStage(api, "not-installed", 30_000);
+  const ob = api.viewState().onboarding;
+  check("A. CLI missing → 'OpenCode is required' onboarding", ob.stage === "not-installed");
+  check(
+    "A. Checklist: OpenCode installed / connected not done",
+    ob.checklist.installed === "todo" && ob.checklist.connected === "todo",
+    JSON.stringify(ob.checklist),
+  );
+  await waitFor("status bar", () => api.statusBar().text.includes("Not installed"), 5000).catch(
+    () => undefined,
+  );
+  check(
+    "A. Status Bar: OpenCode: Not installed",
+    api.statusBar().text.includes("OpenCode: Not installed"),
+    api.statusBar().text,
+  );
+  check("A. Chat disabled until OpenCode is usable", stage(api) !== "ready");
+  // The user installs OpenCode (here: points the setting at the real CLI) and its service is reachable:
+  // the sidebar re-checks and continues without a window reload.
+  await settings().update("executablePath", CLI, vscode.ConfigurationTarget.Global);
+  await settings().update("serverUrl", FREE_URL, vscode.ConfigurationTarget.Global);
+  await waitStage(api, "ready", 90_000);
+  check("A. Check again → ready without reloading the window", stage(api) === "ready");
+}
+
+async function onbStopped(api: TestApi): Promise<void> {
+  await openChat(api);
+  await waitStage(api, "stopped", 30_000);
+  const st = api.viewState();
+  check("B. Service not running → 'OpenCode is installed' onboarding", st.onboarding.stage === "stopped");
+  check(
+    "B. Checklist: installed done, connected not done",
+    st.onboarding.checklist.installed === "done" && st.onboarding.checklist.connected === "todo",
+    JSON.stringify(st.onboarding.checklist),
+  );
+  await waitFor("status bar", () => api.statusBar().text.includes("Stopped"), 5000).catch(() => undefined);
+  check(
+    "B. Status Bar: OpenCode: Stopped",
+    api.statusBar().text.includes("OpenCode: Stopped"),
+    api.statusBar().text,
+  );
+  await vscode.commands.executeCommand("opencodeSidebar.refreshConnection");
+  await waitFor("re-check", () => api.connection().kind !== "connecting", 30_000);
+  check("B. Refresh Connection re-checks (still stopped)", stage(api) === "stopped", stage(api));
+  // The service becomes reachable (here: the isolated server) → continues automatically.
+  await settings().update("serverUrl", FREE_URL, vscode.ConfigurationTarget.Global);
+  await waitStage(api, "ready", 90_000);
+  check("B. Continues to ready once OpenCode runs", stage(api) === "ready");
+}
+
+async function onbSignIn(api: TestApi): Promise<void> {
+  await openChat(api);
+  await waitStage(api, "sign-in", 60_000);
+  let ob = api.viewState().onboarding;
+  check("C. No account, no models → Sign in onboarding", ob.stage === "sign-in");
+  check(
+    "C. Checklist: account + models to do",
+    ob.checklist.account === "todo" && ob.checklist.models === "todo" && ob.checklist.connected === "done",
+    JSON.stringify(ob.checklist),
+  );
+  check(
+    "C. Header/Status Bar never say Connected while chat is unusable",
+    api.statusBar().text.includes("Sign in required") && !api.statusBar().text.includes("Connected"),
+    api.statusBar().text,
+  );
+
+  // Sign in to OpenCode (same handler as the button): OpenCode's own device login in a terminal.
+  await vscode.commands.executeCommand("opencodeSidebar.signIn");
+  const term = await waitFor("sign-in terminal", () => terminalNamed("OpenCode Sign In")[0], 10_000);
+  const opts = term.creationOptions as vscode.TerminalOptions;
+  check(
+    "C. Sign in runs `opencode auth login opencode --method device` (OpenCode's flow)",
+    opts.shellPath === CLI &&
+      JSON.stringify(opts.shellArgs) ===
+        JSON.stringify(["auth", "login", "opencode", "--method", "device", "--server", BARE_URL]),
+    `${path.basename(String(opts.shellPath))} ${JSON.stringify(opts.shellArgs)}`,
+  );
+  check("C. Waiting state shown", api.viewState().onboarding.signIn === "waiting");
+  await vscode.commands.executeCommand("opencodeSidebar.signIn");
+  check("C. A second click reuses the open sign-in terminal", terminalNamed("OpenCode Sign In").length === 1);
+  await sleep(5000);
+  check("C. OpenCode device login started and is waiting for the browser", term.exitStatus === undefined);
+
+  // Login cancelled: the user closes the sign-in terminal (Terminal: Kill) before anything changed.
+  term.show();
+  await sleep(300);
+  await vscode.commands.executeCommand("workbench.action.terminal.kill");
+  await waitFor("cancelled", () => api.signInState() === "cancelled", 15_000).catch((e: Error) => {
+    throw new Error(
+      `${e.message}; state=${api.signInState()} exit=${JSON.stringify(term.exitStatus)} terminals=${vscode.window.terminals.map((t) => t.name).join("|")} stage=${stage(api)}`,
+    );
+  });
+  check("Error UX: login cancelled is reported", api.viewState().onboarding.signIn === "cancelled");
+  check("C. Still asks to sign in after a cancelled login", stage(api) === "sign-in");
+
+  // D. Connect another provider: OpenCode's provider picker in a terminal. OpenCode then records a
+  // provider connection (simulated with OpenCode's API on the isolated server) that offers no models.
+  await api.handle({ type: "connectProvider" });
+  const prov = await waitFor("provider terminal", () => terminalNamed("OpenCode Providers")[0], 10_000);
+  const popts = prov.creationOptions as vscode.TerminalOptions;
+  check(
+    "D. Configure models / Connect provider runs `opencode auth login` (OpenCode's provider picker)",
+    JSON.stringify(popts.shellArgs) === JSON.stringify(["auth", "login", "--server", BARE_URL]),
+    JSON.stringify(popts.shellArgs),
+  );
+  await connectTestKey(BARE_URL, "openai", "sk-acceptance-test-key-not-real");
+  await waitStage(api, "no-models", 30_000);
+  ob = api.viewState().onboarding;
+  check(
+    "D. Connected provider but no models → 'No models are available yet.' (auto re-check)",
+    ob.stage === "no-models",
+    JSON.stringify(ob.checklist),
+  );
+  check(
+    "D. Status Bar: OpenCode: No models",
+    api.statusBar().text.includes("No models"),
+    api.statusBar().text,
+  );
+  await waitFor("wait ended", () => api.signInState() === "idle", 15_000).catch(() => undefined);
+  check("D. The wait ends when OpenCode reports the change", api.signInState() === "idle", api.signInState());
+  await vscode.commands.executeCommand("opencodeSidebar.refreshConnection");
+  check("D. Refresh keeps the honest state", stage(api) === "no-models");
+  prov.dispose();
+
+  // Sign in again; OpenCode records an OpenCode Console credential (the test key is not valid, so
+  // OpenCode reports that the sign-in must be renewed).
+  await vscode.commands.executeCommand("opencodeSidebar.signIn");
+  const term3 = await waitFor(
+    "sign-in terminal",
+    () => terminalNamed("OpenCode Sign In").find((t) => t !== term && t.exitStatus === undefined),
+    10_000,
+  );
+  await connectTestKey(BARE_URL, "opencode", "acceptance-test-key-not-real");
+  await waitStage(api, "sign-in-expired", 30_000);
+  check(
+    "C. Auto re-check after login, no manual refresh (OpenCode reports the sign-in as expired)",
+    stage(api) === "sign-in-expired",
+  );
+  await waitFor("wait ended", () => api.signInState() === "idle", 15_000).catch(() => undefined);
+  check(
+    "C. Sign-in wait ends when OpenCode reports the change",
+    api.signInState() === "idle",
+    api.signInState(),
+  );
+  term3.dispose();
+
+  // E. A provider with models appears.
+  await connectTestKey(BARE_URL, "anthropic", "sk-ant-acceptance-test-key-not-real");
+  await waitStage(api, "ready", 30_000);
+  const st = api.viewState();
+  check(
+    "E. Models appear → onboarding hides automatically",
+    st.onboarding.stage === "ready",
+    `${st.models?.length} models`,
+  );
+  check("E. Expired OpenCode sign-in still noted (non-blocking)", st.onboarding.hint === "sign-in-expired");
+  await waitFor("status bar", () => api.statusBar().text.includes("Connected"), 5000).catch(() => undefined);
+  check(
+    "E. Status Bar: OpenCode: Connected",
+    api.statusBar().text.includes("OpenCode: Connected"),
+    api.statusBar().text,
+  );
+  const leaked = JSON.stringify(st).match(/sk-|acceptance-test-key/);
+  check("Privacy: no credential material in the view state", !leaked);
+}
+
+async function onbNoFolder(api: TestApi): Promise<void> {
+  await openChat(api);
+  await waitStage(api, "no-folder", 60_000);
+  check("F. No folder → 'Open a project to start coding'", stage(api) === "no-folder");
+  check(
+    "F. Status Bar is neutral (not Connected)",
+    api.statusBar().text.includes("OpenCode Chat"),
+    api.statusBar().text,
+  );
+  check("F. Focus Chat works without a folder", api.viewVisible());
+}
+
+async function onbReady(api: TestApi): Promise<void> {
+  // Read-only against the user's real OpenCode service.
+  await openChat(api);
+  await waitStage(api, "ready", 90_000);
+  const st = api.viewState();
+  check("E. Existing configured user: no onboarding", st.onboarding.stage === "ready");
+  check("E. No sign-in note for a signed-in user", st.onboarding.hint === null, String(st.onboarding.hint));
+  check(
+    "E. Status Bar: OpenCode: Connected",
+    api.statusBar().text.includes("OpenCode: Connected"),
+    api.statusBar().text,
+  );
+  // Privacy: connection labels from OpenCode's integration list never reach the view state.
+  const svc = JSON.parse(
+    fs.readFileSync(path.join(process.env.HOME ?? "", ".local", "state", "opencode", "service.json"), "utf8"),
+  ) as { url: string; password: string };
+  const auth = "Basic " + Buffer.from("opencode:" + svc.password).toString("base64");
+  const list = (await (
+    await fetch(new URL("/api/integration", svc.url), { headers: { authorization: auth } })
+  ).json()) as {
+    data: Array<{ connections: Array<{ label?: string; id?: string }> }>;
+  };
+  const conns = list.data.flatMap((i) => i.connections);
+  const ids = conns.map((c) => c.id).filter((x): x is string => !!x);
+  const labels = conns.map((c) => c.label).filter((x): x is string => !!x);
+  const json = JSON.stringify(st);
+  check(
+    "Privacy: credential ids from OpenCode's integration list are not in the view state",
+    ids.every((id) => !json.includes(id)),
+    `${ids.length} checked`,
+  );
+  // Provider display names come from OpenCode's provider list (shown in the model picker by design)
+  // and may contain an account label; outside of them, labels must not appear.
+  const withoutProviderNames = JSON.stringify({
+    ...st,
+    models: (st.models ?? []).map((m) => ({ ...m, providerName: "" })),
+  });
+  check(
+    "Privacy: account labels are not in the view state (outside OpenCode's provider names)",
+    labels.every((l) => !withoutProviderNames.includes(l)),
+    `${labels.length} checked`,
+  );
+  // Refresh keeps the user's selection.
+  const other = st.models?.find((m) => m.key !== st.selectedModel);
+  if (other) {
+    await api.handle({ type: "selectModel", key: other.key });
+    await vscode.commands.executeCommand("opencodeSidebar.refreshConnection");
+    check(
+      "Refresh Connection keeps the selected model",
+      api.viewState().selectedModel === other.key,
+      other.key,
+    );
+  }
+}
+
+async function easyOpen(api: TestApi, reload: boolean): Promise<void> {
+  const ext = vscode.extensions.all.find((e) => e.packageJSON?.name === "opencode-chat-sidebar")!;
+  const pj = ext.packageJSON;
+  if (!reload) {
+    check(
+      "G. Activated after startup without opening or focusing the chat",
+      !api.viewVisible() && api.connection().kind === "connecting",
+    );
+    check(
+      "G. Status Bar item before connecting: 'OpenCode Chat' → Focus Chat",
+      api.statusBar().text.includes("OpenCode Chat") &&
+        api.statusBar().command === "opencodeSidebar.focusChat",
+      api.statusBar().text,
+    );
+  }
+  check(
+    "G. One Activity Bar container titled 'OpenCode Chat Sidebar' with one view",
+    pj.contributes.viewsContainers.activitybar.length === 1 &&
+      pj.contributes.viewsContainers.activitybar[0].title === "OpenCode Chat Sidebar" &&
+      pj.contributes.views.opencodeSidebar.length === 1,
+  );
+  check(
+    "G. Keyboard shortcut contributes the same command (Cmd+Alt+O on macOS)",
+    JSON.stringify(pj.contributes.keybindings) ===
+      JSON.stringify([{ command: "opencodeSidebar.focusChat", key: "cmd+alt+o", when: "isMac" }]),
+  );
+  // Status Bar click = the canonical command.
+  await vscode.commands.executeCommand(String(api.statusBar().command));
+  await api.ensureStarted();
+  await waitFor("view visible", () => api.viewVisible(), 15_000);
+  await waitFor("webview ready", () => !api.focusPending(), 15_000);
+  check("G. Status Bar opens the chat and focuses the input", api.viewVisible() && !api.focusPending());
+  await waitStage(api, "ready", 90_000);
+  check(
+    "G. Status Bar shows OpenCode: Connected",
+    api.statusBar().text.includes("OpenCode: Connected"),
+    api.statusBar().text,
+  );
+
+  if (!reload) {
+    await vscode.commands.executeCommand("workbench.action.closeSidebar");
+    await waitFor("hidden", () => !api.viewVisible(), 10_000);
+    await vscode.commands.executeCommand("opencodeSidebar.focusChat");
+    await waitFor("visible", () => api.viewVisible(), 10_000);
+    check("G. Focus Chat reveals the closed Primary Side Bar view", api.viewVisible());
+    // The user moves the chat to the Secondary Side Bar.
+    await vscode.commands.executeCommand("vscode.moveViews", {
+      viewIds: ["opencodeSidebar.chat"],
+      destinationId: "workbench.panel.chat",
+    });
+    await sleep(1000);
+    await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar");
+    await vscode.commands.executeCommand("workbench.action.closeSidebar");
+    await waitFor("hidden", () => !api.viewVisible(), 10_000);
+    await vscode.commands.executeCommand("opencodeSidebar.focusChat");
+    await waitFor("visible", () => api.viewVisible(), 10_000);
+    check("G. Focus Chat reveals the view in the Secondary Side Bar", api.viewVisible());
+
+    // During a running task: Focus Chat does not disturb it; a notification's Open Chat reveals it.
+    const model =
+      api.viewState().models?.find((m) => /ling.*free/.test(m.key)) ??
+      api.viewState().models?.find((m) => /free/.test(m.key));
+    if (model) await api.handle({ type: "selectModel", key: model.key });
+    const notices: string[] = [];
+    api.setNotifier(async (_sev, message) => {
+      notices.push(message);
+      return "Open Chat";
+    });
+    await api.handle({ type: "newSession" });
+    const since = events.length;
+    await api.handle({ type: "send", text: "Reply with the single word OK." });
+    await waitFor(
+      "busy",
+      () => api.viewState().busy || events.slice(since).some((e) => e.type === "session.idle"),
+      30_000,
+    );
+    const sid = api.controller()?.current?.id;
+    const wasBusy = api.viewState().busy;
+    await vscode.commands.executeCommand("opencodeSidebar.focusChat");
+    check(
+      "G. Focus Chat during a running task keeps the task and session",
+      api.controller()?.current?.id === sid &&
+        (!wasBusy || api.viewState().busy || events.slice(since).some((e) => e.type === "session.idle")),
+      `${model?.key}; busy=${wasBusy}`,
+    );
+    await vscode.commands.executeCommand("workbench.action.closeAuxiliaryBar");
+    await waitFor("hidden", () => !api.viewVisible(), 10_000);
+    await waitFor("idle", () => events.slice(since).some((e) => e.type === "session.idle"), 180_000);
+    await waitFor("notification", () => notices.length > 0, 15_000);
+    await waitFor("visible after Open Chat", () => api.viewVisible(), 10_000);
+    check("G. Notification 'Open Chat' uses Focus Chat and reveals the view", api.viewVisible(), notices[0]);
+    // Leave the chat in the Secondary Side Bar for the reload run.
+  } else {
+    check("G. After reload: Focus Chat still reveals the moved view", api.viewVisible());
+    await vscode.commands.executeCommand("opencodeSidebar.focusChat");
+    await vscode.commands.executeCommand("opencodeSidebar.focusChat");
+    check(
+      "G. Repeated Focus Chat keeps one chat view",
+      api.viewVisible() && pj.contributes.views.opencodeSidebar.length === 1,
+    );
+  }
+}
+
 export async function run(): Promise<void> {
   const ext = vscode.extensions.all.find((e) => e.packageJSON?.name === "opencode-chat-sidebar");
   if (!ext) throw new Error("extension not found");
@@ -1098,6 +1485,13 @@ export async function run(): Promise<void> {
     else if (scenario === "real-repo-task") await realRepoTask(api);
     else if (scenario === "fixture") await fixture(api);
     else if (scenario === "worktree") await worktree(api);
+    else if (scenario === "onb-a-missing") await onbMissing(api);
+    else if (scenario === "onb-b-stopped") await onbStopped(api);
+    else if (scenario === "onb-c-signin") await onbSignIn(api);
+    else if (scenario === "onb-f-nofolder") await onbNoFolder(api);
+    else if (scenario === "onb-e-ready") await onbReady(api);
+    else if (scenario === "easy-open") await easyOpen(api, false);
+    else if (scenario === "easy-open-reload") await easyOpen(api, true);
     else throw new Error(`unknown scenario ${scenario}`);
   } catch (e) {
     check("Scenario completed", false, e instanceof Error ? e.message : String(e));

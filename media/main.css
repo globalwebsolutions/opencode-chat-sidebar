@@ -114,8 +114,20 @@ body {
 }
 .status-error .dot,
 .status-cli-not-found .dot,
-.status-not-running .dot {
+.status-not-running .dot,
+.status.stage-catalog-error .dot {
   background: var(--err);
+}
+/* Connected to OpenCode, but the chat still needs something (sign-in, models, a folder). */
+.status.stage-sign-in .dot,
+.status.stage-sign-in-expired .dot,
+.status.stage-no-models .dot,
+.status.stage-no-folder .dot {
+  background: var(--vscode-editorWarning-foreground, var(--warn-border));
+}
+.status.stage-loading .dot {
+  background: var(--vscode-progressBar-background);
+  animation: pulse 1s infinite alternate;
 }
 
 .ws-row {
@@ -773,6 +785,60 @@ th {
   align-items: flex-start;
   gap: var(--gap);
   justify-content: space-between;
+}
+.hint-actions {
+  display: inline-flex;
+  gap: var(--gap);
+  flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------ onboarding */
+
+.onboarding {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: var(--vscode-sideBar-background, transparent);
+  white-space: normal;
+}
+.onboarding p {
+  margin: 4px 0;
+  line-height: 1.45;
+}
+.onboarding .banner {
+  margin: 6px 0;
+}
+.checklist {
+  list-style: none;
+  margin: 10px 0 4px;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+}
+.setup-check {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 0;
+}
+.setup-mark {
+  width: 1.1em;
+  text-align: center;
+  font-weight: 600;
+  color: var(--muted);
+}
+.setup-done .setup-mark {
+  color: var(--vscode-testing-iconPassed, var(--add));
+}
+.setup-todo .setup-mark,
+.setup-expired .setup-mark {
+  color: var(--vscode-editorWarning-foreground, var(--warn-border));
+}
+.setup-todo,
+.setup-expired {
+  font-weight: 600;
+}
+.onboarding .help {
+  margin-top: 8px;
 }
 
 .msg-footer {

@@ -65,6 +65,8 @@ The real-repository scenario is read-only by construction: it uses OpenCode's `p
 
 Scenarios use real model calls, so they cost a small number of tokens with your configured provider.
 
+**Onboarding / easy open (v0.3):** `ACCEPT_ONBOARDING=1` adds them, `ACCEPT_ONBOARDING_ONLY=1` runs only them. The runner starts two temporary `opencode serve` instances with their own HOME/XDG directories and a minimal environment (no inherited API keys): _free_ (OpenCode's default free models, no account) and _bare_ (no account, the OpenCode and OpenAI providers disabled, so no models). Scenarios: CLI missing (A), service unreachable (B), sign-in → expired sign-in → connected provider without models → provider with models (C/D/E, simulated with obviously fake test keys added through OpenCode's own API on the _bare_ server only), no folder (F), an existing configured user on the real service (E, read-only), and easy open (G: Status Bar, Focus Chat in the Primary and Secondary Side Bar, Focus Chat during a running task, notification Open Chat, and a second launch of the same profile as a reload). The user's real OpenCode account is never modified.
+
 ## Marketplace screenshots
 
 `node scripts/screenshots.mjs` (after `npm run build`) renders the screenshots in `docs/marketplace/screenshots/` from the real webview bundle with generic demo data. See `docs/marketplace/MARKETPLACE.md`.

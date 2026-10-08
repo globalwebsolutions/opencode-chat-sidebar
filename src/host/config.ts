@@ -10,6 +10,7 @@ export interface SidebarConfig {
   defaultAgent: string;
   autoStart: boolean;
   showUsage: boolean;
+  showStatusBarItem: boolean;
   budgetDefault: BudgetLevel;
   budget: BudgetSettings;
   contextWarnPercent: number;
@@ -55,6 +56,7 @@ export function readConfig(): SidebarConfig {
     defaultAgent: c.get<string>("defaultAgent", ""),
     autoStart: c.get<boolean>("autoStart", false),
     showUsage: c.get<boolean>("showUsage", true),
+    showStatusBarItem: c.get<boolean>("showStatusBarItem", true),
     budgetDefault: (LEVELS as string[]).includes(level) ? (level as BudgetLevel) : "medium",
     budget: {
       presets: {
