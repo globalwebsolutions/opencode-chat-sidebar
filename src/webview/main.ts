@@ -275,6 +275,172 @@ function budgetLabel(level: BudgetLevel, s: ViewState): string {
 
 // ------------------------------------------------------------------ header
 
+// The <select> stays the source of truth (value, focus, change events), but the
+// open list is ours. VS Code draws native <select> popups with the operating
+// system, so on macOS they ignore the theme and end up the same colour as the
+// sidebar. The custom menu uses the raised surface defined in main.css.
+let selectMenu: {
+  select: HTMLSelectElement;
+  el: HTMLElement;
+  cleanup: () => void;
+} | null = null;
+
+function closeSelectMenu(restoreFocus = false): void {
+  const open = selectMenu;
+  if (!open) return;
+  selectMenu = null;
+  open.cleanup();
+  open.el.remove();
+  open.select.removeAttribute("aria-expanded");
+  if (restoreFocus && open.select.isConnected) open.select.focus();
+}
+
+function openSelectMenu(sel: HTMLSelectElement): void {
+  closeSelectMenu();
+  if (sel.disabled) return;
+
+  const menu = h("div", {
+    className: "select-menu",
+    role: "listbox",
+    tabindex: "-1",
+    "aria-label": sel.getAttribute("aria-label") ?? "Options",
+    "data-testid": "select-menu",
+    "data-for": sel.id,
+  });
+  const items: HTMLElement[] = [];
+  let optionIndex = 0;
+
+  const pick = (value: string): void => {
+    closeSelectMenu();
+    if (sel.value !== value) {
+      sel.value = value;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    sel.focus();
+  };
+
+  const addOption = (opt: HTMLOptionElement): void => {
+    const selected = opt.value === sel.value;
+    const item = h(
+      "div",
+      {
+        className: `select-menu-item${selected ? " selected" : ""}`,
+        role: "option",
+        id: `${sel.id}-option-${optionIndex++}`,
+        "aria-selected": selected ? "true" : "false",
+        "aria-disabled": opt.disabled ? "true" : undefined,
+        "data-value": opt.value,
+        title: opt.title || undefined,
+        onclick: () => {
+          if (!opt.disabled) pick(opt.value);
+        },
+      },
+      h("span", { className: "select-menu-check", "aria-hidden": "true" }, selected ? "✓" : ""),
+      h("span", { className: "select-menu-text" }, opt.textContent ?? ""),
+    );
+    items.push(item);
+    menu.append(item);
+  };
+
+  for (const child of Array.from(sel.children)) {
+    if (child instanceof HTMLOptGroupElement) {
+      menu.append(h("div", { className: "select-menu-group", role: "presentation" }, child.label));
+      for (const opt of Array.from(child.children)) if (opt instanceof HTMLOptionElement) addOption(opt);
+    } else if (child instanceof HTMLOptionElement) addOption(child);
+  }
+
+  document.body.append(menu);
+
+  const rect = sel.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const width = Math.min(Math.max(rect.width, 200), viewportWidth - 16);
+  menu.style.width = `${Math.round(width)}px`;
+  const height = menu.offsetHeight;
+  const rtl = getComputedStyle(sel).direction === "rtl";
+  const left = rtl ? rect.right - width : rect.left;
+  let top = rect.bottom + 2;
+  if (top + height > viewportHeight - 8) top = Math.max(8, rect.top - height - 2);
+  menu.style.left = `${Math.round(Math.max(8, Math.min(left, viewportWidth - width - 8)))}px`;
+  menu.style.top = `${Math.round(top)}px`;
+
+  let active = Math.max(
+    0,
+    items.findIndex(
+      (item) => item.classList.contains("selected") && item.getAttribute("aria-disabled") !== "true",
+    ),
+  );
+  const setActive = (index: number): void => {
+    if (items.length === 0) return;
+    active = Math.max(0, Math.min(items.length - 1, index));
+    items.forEach((item, i) => item.classList.toggle("active", i === active));
+    const item = items[active];
+    if (!item) return;
+    menu.setAttribute("aria-activedescendant", item.id);
+    item.scrollIntoView({ block: "nearest" });
+  };
+
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.key === "Tab") {
+      // Hand focus back to the select so Tab continues to the next control.
+      closeSelectMenu(true);
+      return;
+    }
+    if (
+      e.key !== "Escape" &&
+      e.key !== "Enter" &&
+      e.key !== " " &&
+      e.key !== "ArrowDown" &&
+      e.key !== "ArrowUp" &&
+      e.key !== "Home" &&
+      e.key !== "End"
+    )
+      return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      closeSelectMenu(true);
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      items[active]?.click();
+      return;
+    }
+    if (e.key === "Home") setActive(0);
+    else if (e.key === "End") setActive(items.length - 1);
+    else setActive(active + (e.key === "ArrowDown" ? 1 : -1));
+  };
+  menu.addEventListener("keydown", onKey);
+
+  const onOutside = (e: MouseEvent): void => {
+    const target = e.target as Node;
+    if (!menu.contains(target) && target !== sel) closeSelectMenu();
+  };
+  const onViewport = (e: Event): void => {
+    if (e.type === "scroll" && menu.contains(e.target as Node)) return;
+    closeSelectMenu();
+  };
+  const onBlur = (): void => closeSelectMenu();
+  document.addEventListener("mousedown", onOutside, true);
+  window.addEventListener("resize", onViewport);
+  window.addEventListener("scroll", onViewport, true);
+  window.addEventListener("blur", onBlur);
+
+  selectMenu = {
+    select: sel,
+    el: menu,
+    cleanup: () => {
+      document.removeEventListener("mousedown", onOutside, true);
+      window.removeEventListener("resize", onViewport);
+      window.removeEventListener("scroll", onViewport, true);
+      window.removeEventListener("blur", onBlur);
+    },
+  };
+  sel.setAttribute("aria-expanded", "true");
+  setActive(active);
+  menu.focus();
+}
+
 function select(
   id: string,
   label: string,
@@ -306,6 +472,22 @@ function select(
       g.append(opt);
     } else sel.append(opt);
   }
+  sel.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || sel.disabled) return;
+    // Prevent the native popup so the themed menu below is the only one shown.
+    e.preventDefault();
+    if (selectMenu?.select === sel) closeSelectMenu(true);
+    else {
+      sel.focus();
+      openSelectMenu(sel);
+    }
+  });
+  sel.addEventListener("keydown", (e) => {
+    if (sel.disabled || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    openSelectMenu(sel);
+  });
   return sel;
 }
 
@@ -2082,6 +2264,8 @@ function render() {
   renderChanges(state);
   renderPending(state);
   renderComposer(state);
+  // A state push rebuilds the header; drop a menu whose <select> is gone.
+  if (selectMenu && !selectMenu.select.isConnected) closeSelectMenu();
   if (lastBusy !== state.busy) {
     // Copy buttons and budget/error actions depend on the running state.
     lastBusy = state.busy;

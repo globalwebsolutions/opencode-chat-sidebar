@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+
+Readability.
+
+- Menus and the recent-sessions list now sit on a raised surface, one step lighter than the sidebar in dark themes (and a touch darker in light themes), so they stand out from the chat panel instead of blending into it.
+- The Model, Variant, Agent and Budget pickers open a custom, theme-aware menu. Native `<select>` popups are drawn by the operating system, so on macOS they ignored the VS Code theme; the new menu follows the theme everywhere, keeps provider groups, marks the current value, and supports the keyboard (arrows, Home/End, Enter/Space, Escape, Tab).
+- High-contrast themes stay flat: the menu keeps its border and drops the shadow.
+
 ## 0.3.1
 
 UI label patch.

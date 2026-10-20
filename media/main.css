@@ -12,6 +12,23 @@
   --warn-border: var(--vscode-inputValidation-warningBorder);
   --err: var(--vscode-errorForeground);
   --mono: var(--vscode-editor-font-family);
+  /* Raised surface: one step lighter than the panel in dark themes and a touch
+     darker in light themes, so menus and lists read as their own layer instead
+     of blending into the sidebar. Falls back to the theme's menu colour. */
+  --surface-raised: var(--vscode-menu-background, var(--vscode-dropdown-background));
+  --surface-raised: color-mix(
+    in srgb,
+    var(--vscode-menu-background, var(--vscode-dropdown-background, #3c3c3c)) 86%,
+    #ffffff 14%
+  );
+}
+
+body.vscode-light {
+  --surface-raised: color-mix(
+    in srgb,
+    var(--vscode-menu-background, var(--vscode-dropdown-background, #ffffff)) 94%,
+    #000000 6%
+  );
 }
 
 * {
@@ -181,12 +198,70 @@ body {
 .select {
   width: 100%;
   min-width: 0;
-  background: var(--vscode-dropdown-background);
+  background: var(--surface-raised);
   color: var(--vscode-dropdown-foreground);
   border: 1px solid var(--vscode-dropdown-border, var(--border));
   border-radius: var(--radius);
   padding: 2px 4px;
   font: inherit;
+}
+/* Windows/Linux honour option colours if the native popup ever opens (keyboard
+   fallbacks); macOS ignores them, which is why the menu below is custom. */
+.select option,
+.select optgroup {
+  background: var(--surface-raised);
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+}
+
+.select-menu {
+  position: fixed;
+  z-index: 100;
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--surface-raised);
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+}
+.select-menu:focus {
+  outline: none;
+}
+.select-menu-group {
+  padding: 5px 8px 2px;
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+.select-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.select-menu-item.selected {
+  background: var(--vscode-list-inactiveSelectionBackground);
+}
+.select-menu-item:hover,
+.select-menu-item.active {
+  background: var(--vscode-list-hoverBackground);
+}
+.select-menu-item[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+.select-menu-check {
+  flex: none;
+  width: 1em;
+}
+.select-menu-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .usage {
   font-size: 0.85em;
@@ -313,7 +388,10 @@ button:disabled {
 .session-list {
   list-style: none;
   margin: 4px 0 0;
-  padding: 0;
+  padding: 2px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 .session-item {
   width: 100%;
@@ -1069,6 +1147,13 @@ th {
 body.vscode-high-contrast,
 body.vscode-high-contrast-light {
   --border: var(--vscode-contrastBorder, CanvasText);
+  /* Keep high contrast flat: the border carries the separation. */
+  --surface-raised: var(--vscode-menu-background, var(--vscode-dropdown-background));
+}
+body.vscode-high-contrast .select-menu,
+body.vscode-high-contrast-light .select-menu {
+  border-width: 2px;
+  box-shadow: none;
 }
 body.vscode-high-contrast .btn,
 body.vscode-high-contrast-light .btn,
@@ -1106,6 +1191,7 @@ body.vscode-high-contrast-light .chip {
 @media (forced-colors: active) {
   .btn,
   .select,
+  .select-menu,
   .input,
   .text-input,
   .chip,

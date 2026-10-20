@@ -320,6 +320,30 @@ describe(
       ]);
     });
 
+    it("opens a raised menu for the selectors and picks an option", async () => {
+      await page.click("#model-select");
+      await page.waitForSelector('[data-testid="select-menu"]');
+      const menu = await page.$eval('[data-testid="select-menu"]', (el) => {
+        const style = getComputedStyle(el);
+        return { background: style.backgroundColor, position: style.position };
+      });
+      assert.equal(menu.position, "fixed");
+      assert.notEqual(menu.background, "rgba(0, 0, 0, 0)", "menu has its own raised surface");
+      const options = await page.$$eval('[data-testid="select-menu"] [role="option"]', (o) =>
+        o.map((x) => x.textContent?.trim()),
+      );
+      assert.ok(
+        options.some((o) => o?.includes("Qwen3.7 Plus")),
+        options.join(" | "),
+      );
+      await page.click('[data-testid="select-menu"] [data-value="opencode-go/qwen3.7-plus"]');
+      assert.deepEqual(await lastSent("selectModel"), {
+        type: "selectModel",
+        key: "opencode-go/qwen3.7-plus",
+      });
+      assert.equal(await page.$('[data-testid="select-menu"]'), null, "menu closes after picking");
+    });
+
     it("shows compact session metrics and the task meter", async () => {
       await host({
         type: "state",
