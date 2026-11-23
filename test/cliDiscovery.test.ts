@@ -79,9 +79,10 @@ describe("CLI discovery", () => {
       pathEnv: "C:\\tools;C:\\bin",
       home: "C:\\Users\\u",
       platform: "win32",
-      isExecutable: (f) => f.toLowerCase().endsWith("bin\\opencode.cmd") || f === "C:\\bin/opencode.cmd",
+      isExecutable: (f) => f === "C:\\bin\\opencode.cmd",
     });
-    assert.equal(r.found, true);
+    // Windows path rules apply whatever the host is: `C:\bin` is an absolute PATH entry.
+    assert.deepEqual(r, { found: true, path: "C:\\bin\\opencode.cmd", source: "PATH" });
     assert.ok(knownLocations("C:\\Users\\u", "win32").some((p) => p.endsWith("opencode.exe")));
   });
 });
