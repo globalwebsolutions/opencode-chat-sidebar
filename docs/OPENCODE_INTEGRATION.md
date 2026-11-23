@@ -115,3 +115,16 @@ Field types supported in forms are exactly those in `@opencode/schema` `Form.Fie
 - Only `id`, `connections[].type` and `connections[].status.status` (`needs_auth`) are read. Connection labels (which can be personal), ids and methods are ignored. `GET /api/credential` returns credential values and is **never** called.
 - OpenCode 2.0.24 serves some free `opencode/*-free` models without an account, so "no account" alone does not block the chat. Without any connection and without models, the sidebar asks the user to sign in.
 - A fresh OpenCode location can briefly list no models; the catalog is retried before "No models" is shown.
+
+## Subagent sessions
+
+OpenCode runs a subagent (the `subagent` tool, `task` before 2.3) in a child session: `session.created` carries `parentID`, and subagents can start their own subagents. A subagent's permission requests and questions are raised on its own session, but the parent's run waits for them, so the sidebar shows them in the open conversation (OpenCode's TUI does the same for the session's whole family).
+
+| Purpose                     | Endpoint / event                                                                                          |
+| --------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Track subagents live        | `session.created` with `parentID` equal to the open session or one of its subagents                       |
+| Find subagents on reopen    | `GET /api/session?parentID={id}`, followed breadth-first (at most 200 sessions)                           |
+| Pending requests on reopen  | `GET /api/session/{child}/permission` and `/form`, for subagents listed by `GET /api/session/active` only |
+| Answer a subagent's request | `POST /api/session/{child}/permission/{requestID}/reply`, `POST /api/session/{child}/form/{formID}/reply` |
+
+Only `permission.*` and `form.*` events are taken from subagent sessions. Their text, tools and execution state stay out of the parent conversation.

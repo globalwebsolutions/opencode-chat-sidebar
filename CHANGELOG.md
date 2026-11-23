@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Fixes
+
+- Permission requests and questions raised by a **subagent** now appear in the chat. They were dropped because they belong to the subagent's own OpenCode session, which left the task waiting with nothing to answer. Answers go to the subagent's session, nested subagents are followed, and pending requests are restored when a session is reopened.
+
 ## 0.3.2
 
 Readability.

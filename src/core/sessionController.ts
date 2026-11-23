@@ -100,6 +100,8 @@ export type AgentChanges =
 
 export const HISTORY_LIMIT = 400;
 const SESSION_LIST_LIMIT = 30;
+/** Upper bound on subagent sessions followed for one open session (including nested ones). */
+const MAX_SUBAGENTS = 200;
 
 export function contextTokens(t: TokenUsage): number {
   return t.input + t.cacheRead + t.cacheWrite + t.output;
@@ -149,6 +151,12 @@ export class SessionController {
   private contextWarned = false;
   private lastPayload: PromptPayload | null = null;
   private deliveredEarly = new Set<string>();
+  /**
+   * Subagent sessions started (directly or through other subagents) by the open session.
+   * Their permission requests and questions block the open session's run, so they are
+   * shown in its conversation.
+   */
+  private subagents = new Set<string>();
   private titleCache = new Map<string, string | null>();
   private firstUserText: string | null = null;
   private readonly normalizer = new EventNormalizer();
@@ -467,6 +475,7 @@ export class SessionController {
     this.lastPayload = null;
     this.firstUserText = null;
     this.deliveredEarly.clear();
+    this.subagents.clear();
     this.task = null;
     this.execActive = false;
     this.taskStopReason = null;
@@ -489,16 +498,31 @@ export class SessionController {
   async openSession(id: string): Promise<boolean> {
     const token = ++this.loadToken;
     try {
-      const [summary, messages, permissions, forms, inbox, active] = await Promise.all([
+      const [summary, messages, rootPermissions, rootForms, inbox, active, subagents] = await Promise.all([
         this.client.getSession(id),
         this.client.listMessages(id, HISTORY_LIMIT),
         this.client.listPermissions(id).catch(() => []),
         this.client.listForms(id).catch(() => []),
         this.client.listInbox(id).catch(() => []),
         this.client.activeSessions().catch(() => new Set<string>()),
+        this.listSubagents(id),
       ]);
+      // Only a running subagent can be waiting for an answer.
+      const waiting = await Promise.all(
+        subagents
+          .filter((s) => active.has(s))
+          .map((s) =>
+            Promise.all([
+              this.client.listPermissions(s).catch(() => []),
+              this.client.listForms(s).catch(() => []),
+            ]),
+          ),
+      );
+      const permissions = [...rootPermissions, ...waiting.flatMap(([p]) => p)];
+      const forms = [...rootForms, ...waiting.flatMap(([, f]) => f)];
       if (token !== this.loadToken) return false;
       this.clearSession();
+      for (const s of subagents) this.subagents.add(s);
       this.current = summary;
       this.sessionCost = summary.cost;
       this.busy = active.has(id);
@@ -534,6 +558,22 @@ export class SessionController {
       this.emit([{ type: "notice", level: "error", text: friendlyError(e, "Could not open the session") }]);
       return false;
     }
+  }
+
+  /** All subagent sessions below `root`, breadth-first, bounded by MAX_SUBAGENTS. */
+  private async listSubagents(root: string): Promise<string[]> {
+    const found = new Set<string>();
+    let level = [root];
+    while (level.length > 0 && found.size < MAX_SUBAGENTS) {
+      const children = await Promise.all(level.map((s) => this.client.listChildSessions(s).catch(() => [])));
+      level = [];
+      for (const child of children.flat()) {
+        if (child === root || found.has(child) || found.size >= MAX_SUBAGENTS) continue;
+        found.add(child);
+        level.push(child);
+      }
+    }
+    return [...found];
   }
 
   private modelRef(): { providerID: string; id: string; variant?: string } | undefined {
@@ -770,7 +810,8 @@ export class SessionController {
     if (decision === "always" && !item.request.canAlways) return;
     this.emit([{ type: "permission.sending", requestId }]);
     try {
-      await this.client.replyPermission(this.current.id, requestId, decision);
+      // Reply to the session that asked: a subagent's request belongs to its own session.
+      await this.client.replyPermission(item.request.sessionID, requestId, decision);
       this.log.info(`Permission ${requestId} (${item.request.action}) answered: ${decision}`);
       this.emit([{ type: "permission.resolved", requestId, decision }]);
     } catch (e) {
@@ -903,8 +944,22 @@ export class SessionController {
     if (!env) return;
     if (env.sessionsChanged && (env.directory === null || env.directory === this.directory))
       this.scheduleSessionsRefresh();
-    if (!this.current || env.sessionID !== this.current.id || env.events.length === 0) return;
-    this.emit(env.events);
+    if (!this.current || !env.sessionID) return;
+    if (env.parentID && this.inSessionTree(env.parentID) && this.subagents.size < MAX_SUBAGENTS)
+      this.subagents.add(env.sessionID);
+    if (env.events.length === 0) return;
+    if (env.sessionID === this.current.id) {
+      this.emit(env.events);
+    } else if (this.subagents.has(env.sessionID)) {
+      // A subagent's own output and lifecycle stay in its session; only the requests that
+      // block the open session's run are shown here.
+      const requests = env.events.filter(isInputRequest);
+      if (requests.length > 0) this.emit(requests);
+    }
+  }
+
+  private inSessionTree(sessionID: string): boolean {
+    return sessionID === this.current?.id || this.subagents.has(sessionID);
   }
 
   /** Called when the event stream reconnects; resynchronizes the open session. */
@@ -1246,6 +1301,16 @@ export class SessionController {
   get changes(): FileChange[] {
     return this.agentChanges.status === "ok" ? this.agentChanges.files : [];
   }
+}
+
+/** Permission requests and questions, and their resolution: the events that need the user. */
+function isInputRequest(ev: UiEvent): boolean {
+  return (
+    ev.type === "permission.requested" ||
+    ev.type === "permission.resolved" ||
+    ev.type === "form.requested" ||
+    ev.type === "form.resolved"
+  );
 }
 
 /** Events after which models, providers or connections may have changed (e.g. a sign-in). */

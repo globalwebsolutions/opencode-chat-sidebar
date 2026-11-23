@@ -231,6 +231,10 @@ describe("event normalization", () => {
     const created = n.normalize(ev("session.created", { sessionID: S, slug: "x" }, "/repo"));
     assert.equal(created?.sessionsChanged, true);
     assert.equal(created?.directory, "/repo");
+    assert.equal(created?.parentID, null);
+    const child = n.normalize(ev("session.created", { sessionID: "ses_child", parentID: S, title: "x" }));
+    assert.equal(child?.sessionID, "ses_child");
+    assert.equal(child?.parentID, S, "subagent sessions carry their parent");
     assert.equal(
       n.normalize(ev("session.renamed", { sessionID: S, title: "T" }))?.events[0].type,
       "session.renamed",

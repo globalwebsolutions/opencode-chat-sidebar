@@ -154,6 +154,18 @@ describe("HTTP OpenCode client", () => {
     assert.equal(q.get("order"), "desc");
   });
 
+  it("lists the subagent sessions of a session by parentID", async () => {
+    const { fn, captured } = mockFetch({
+      "GET /api/session": () =>
+        json({ data: [{ id: "ses_c1", parentID: "ses_1" }, { id: "ses_c2", parentID: "ses_1" }, {}] }),
+    });
+    const ids = await new HttpOpenCodeClient({ url: "http://127.0.0.1:9" }, fn).listChildSessions("ses_1");
+    assert.deepEqual(ids, ["ses_c1", "ses_c2"]);
+    const q = new URL(captured[0].url).searchParams;
+    assert.equal(q.get("parentID"), "ses_1");
+    assert.equal(q.get("directory"), null, "children are found by parent, not by workspace");
+  });
+
   it("creates sessions, prompts, switches, interrupts and replies with the documented bodies", async () => {
     const { fn, captured } = mockFetch({
       "POST /api/session": () => json({ data: { id: "ses_1", time: { created: 1, updated: 1 } } }),
