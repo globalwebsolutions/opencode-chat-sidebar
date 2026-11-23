@@ -105,6 +105,12 @@ export class MockClient implements OpenCodeClient {
     if (!s) throw new OpenCodeHttpError(404, "NotFound", "Session not found");
     return s;
   }
+  /** Subagent (child) session IDs by parent session ID. */
+  children = new Map<string, string[]>();
+  async listChildSessions(id: string) {
+    this.record("listChildSessions", id);
+    return this.children.get(id) ?? [];
+  }
   async createSession(input: {
     directory: string;
     agent?: string;
@@ -149,8 +155,9 @@ export class MockClient implements OpenCodeClient {
     this.record("interrupt", id);
     return this.interruptResult;
   }
-  async listPermissions() {
-    return this.permissions;
+  async listPermissions(id: string) {
+    this.record("listPermissions", id);
+    return this.permissions.filter((p) => p.sessionID === id);
   }
   async replyPermission(id: string, requestId: string, decision: PermissionDecision) {
     this.record("replyPermission", id, requestId, decision);
@@ -170,7 +177,7 @@ export class MockClient implements OpenCodeClient {
 
   async listForms(id: string) {
     this.record("listForms", id);
-    return this.forms;
+    return this.forms.filter((f) => f.sessionID === id);
   }
   async replyForm(id: string, formId: string, answer: FormAnswer) {
     this.record("replyForm", id, formId, answer);

@@ -399,3 +399,150 @@ describe("session controller: cancellation", () => {
     assert.ok(emitted.some((e) => e.type === "notice" && e.text.includes("Could not stop")));
   });
 });
+
+describe("session controller: subagent permissions and questions", () => {
+  // OpenCode runs a subagent in a child session (`session.created` with `parentID`). Its
+  // permission requests and questions carry the child's session ID, yet the parent's run
+  // is blocked until they are answered, so the sidebar must surface them.
+  async function withSubagent() {
+    const env = setup();
+    await env.c.setDirectory(DIR);
+    await env.c.send("explore the repo", []);
+    env.c.handleRawEvent(raw("session.execution.started", { sessionID: "ses_1" }));
+    env.c.handleRawEvent(
+      raw("session.created", { sessionID: "ses_sub", parentID: "ses_1", title: "Explore" }),
+    );
+    return env;
+  }
+  const subPermission = (id: string, sessionID: string) =>
+    raw("permission.asked", { id, sessionID, action: "bash", resources: ["git status"], save: ["git *"] });
+
+  it("shows a subagent's permission request and replies to the subagent's session", async () => {
+    const { c, client, emitted } = await withSubagent();
+    c.handleRawEvent(subPermission("per_sub", "ses_sub"));
+    const item = c.transcript.get("perm:per_sub");
+    assert.ok(item?.kind === "permission" && item.status === "pending");
+    assert.ok(emitted.some((e) => e.type === "permission.requested" && e.request.id === "per_sub"));
+    await c.respondPermission("per_sub", "once");
+    assert.deepEqual(client.callsTo("replyPermission")[0].args, ["ses_sub", "per_sub", "once"]);
+  });
+
+  it("follows nested subagents", async () => {
+    const { c, client } = await withSubagent();
+    c.handleRawEvent(raw("session.created", { sessionID: "ses_grand", parentID: "ses_sub" }));
+    c.handleRawEvent(subPermission("per_grand", "ses_grand"));
+    assert.ok(c.transcript.get("perm:per_grand"));
+    await c.respondPermission("per_grand", "reject");
+    assert.deepEqual(client.callsTo("replyPermission")[0].args, ["ses_grand", "per_grand", "reject"]);
+  });
+
+  it("resolves the card when the subagent's request is answered elsewhere", async () => {
+    const { c } = await withSubagent();
+    c.handleRawEvent(subPermission("per_sub", "ses_sub"));
+    c.handleRawEvent(
+      raw("permission.replied", { sessionID: "ses_sub", requestID: "per_sub", reply: "once" }),
+    );
+    assert.equal((c.transcript.get("perm:per_sub") as { status: string }).status, "once");
+  });
+
+  it("shows a subagent's question", async () => {
+    const { c } = await withSubagent();
+    c.handleRawEvent(
+      raw("form.created", {
+        form: { id: "frm_sub", sessionID: "ses_sub", title: "Q", fields: [{ key: "q", type: "boolean" }] },
+      }),
+    );
+    const item = c.transcript.get("form:frm_sub");
+    assert.ok(item?.kind === "form" && item.status === "pending");
+  });
+
+  it("keeps a subagent's request answerable after the parent's turn ends", async () => {
+    const { c, client } = await withSubagent();
+    c.handleRawEvent(subPermission("per_sub", "ses_sub"));
+    c.handleRawEvent(raw("session.execution.succeeded", { sessionID: "ses_1" }));
+    assert.equal((c.transcript.get("perm:per_sub") as { status: string }).status, "pending");
+    await c.respondPermission("per_sub", "once");
+    assert.deepEqual(client.callsTo("replyPermission")[0].args, ["ses_sub", "per_sub", "once"]);
+  });
+
+  it("ignores requests from sessions that are not part of the open session", async () => {
+    const { c } = await withSubagent();
+    c.handleRawEvent(raw("session.created", { sessionID: "ses_other_child", parentID: "ses_other" }));
+    c.handleRawEvent(subPermission("per_x", "ses_other_child"));
+    c.handleRawEvent(subPermission("per_y", "ses_unknown"));
+    assert.equal(c.transcript.get("perm:per_x"), undefined);
+    assert.equal(c.transcript.get("perm:per_y"), undefined);
+  });
+
+  it("keeps the subagent's own text and lifecycle out of the parent conversation", async () => {
+    const { c } = await withSubagent();
+    const before = c.transcript.items.length;
+    c.handleRawEvent(
+      raw("session.text.delta", {
+        sessionID: "ses_sub",
+        assistantMessageID: "m_sub",
+        ordinal: 0,
+        delta: "hi",
+      }),
+    );
+    c.handleRawEvent(raw("session.execution.succeeded", { sessionID: "ses_sub" }));
+    assert.equal(c.transcript.items.length, before);
+    assert.equal(c.busy, true, "the parent is still running");
+  });
+
+  it("forgets subagents when another session is opened", async () => {
+    const { c } = await withSubagent();
+    await c.newSession();
+    c.handleRawEvent(subPermission("per_sub", "ses_sub"));
+    assert.equal(c.transcript.get("perm:per_sub"), undefined);
+  });
+
+  it("restores a running subagent's pending requests when the session is reopened", async () => {
+    const { c, client } = setup();
+    await c.setDirectory(DIR);
+    client.sessions = [
+      {
+        id: "ses_old",
+        title: "Old",
+        created: 1,
+        updated: 2,
+        agent: "build",
+        modelKey: null,
+        outcome: null,
+        variant: null,
+        cost: 0,
+      },
+    ];
+    client.children.set("ses_old", ["ses_sub", "ses_done"]);
+    client.children.set("ses_sub", ["ses_grand"]);
+    client.active = new Set(["ses_old", "ses_sub", "ses_grand"]);
+    client.permissions = [
+      {
+        id: "per_grand",
+        sessionID: "ses_grand",
+        action: "bash",
+        resources: ["ls"],
+        canAlways: false,
+        message: null,
+        toolId: null,
+      },
+    ];
+    client.forms = [
+      {
+        id: "frm_sub",
+        sessionID: "ses_sub",
+        title: "Q",
+        fields: [{ key: "q", type: "boolean" }],
+        toolId: null,
+      },
+    ];
+    assert.equal(await c.openSession("ses_old"), true);
+    assert.ok(c.transcript.get("perm:per_grand"));
+    assert.ok(c.transcript.get("form:frm_sub"));
+    // Finished subagents cannot be waiting for input, so they are not queried.
+    assert.ok(!client.callsTo("listForms").some((call) => call.args[0] === "ses_done"));
+    // Live events from a restored subagent are followed too.
+    c.handleRawEvent(subPermission("per_live", "ses_sub"));
+    assert.ok(c.transcript.get("perm:per_live"));
+  });
+});

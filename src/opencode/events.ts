@@ -16,6 +16,8 @@ export interface NormalizedEnvelope {
   sessionsChanged: boolean;
   /** Directory the event was scoped to, when OpenCode provided one. */
   directory: string | null;
+  /** For `session.created`: the parent session, set when the new session is a subagent. */
+  parentID: string | null;
 }
 
 const rec = (v: unknown): Rec | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Rec) : null);
@@ -140,17 +142,25 @@ export class EventNormalizer {
     const data = rec(env.data) ?? {};
     const directory = s(rec(env.location)?.directory);
     const sessionID = s(data.sessionID) ?? s(rec(data.form)?.sessionID);
-    const out = (events: UiEvent[], sessionsChanged = false): NormalizedEnvelope => ({
+    const out = (
+      events: UiEvent[],
+      sessionsChanged = false,
+      parentID: string | null = null,
+    ): NormalizedEnvelope => ({
       sessionID,
       events,
       sessionsChanged,
       directory,
+      parentID,
     });
+    const idle = (outcome: "succeeded" | "failed" | "interrupted"): UiEvent =>
+      sessionID ? { type: "session.idle", outcome, sessionID } : { type: "session.idle", outcome };
     const partId = () => `${s(data.assistantMessageID) ?? "?"}:${n(data.ordinal)}`;
     const toolId = s(data.id) ?? "?";
 
     switch (type) {
       case "session.created":
+        return out([], true, s(data.parentID));
       case "session.deleted":
         return out([], true);
       case "session.renamed":
@@ -202,9 +212,9 @@ export class EventNormalizer {
       case "session.execution.started":
         return out([{ type: "session.busy" }]);
       case "session.execution.succeeded":
-        return out([{ type: "session.idle", outcome: "succeeded" }], true);
+        return out([idle("succeeded")], true);
       case "session.execution.interrupted":
-        return out([{ type: "session.idle", outcome: "interrupted" }], true);
+        return out([idle("interrupted")], true);
       case "session.execution.failed":
         return out(
           [
@@ -214,7 +224,7 @@ export class EventNormalizer {
               error: toRawError(data.error),
               modelKey: sessionID ? (this.sessionModel.get(sessionID) ?? null) : null,
             },
-            { type: "session.idle", outcome: "failed" },
+            idle("failed"),
           ],
           true,
         );
@@ -250,6 +260,7 @@ export class EventNormalizer {
           events: [{ type: "tool.shell", toolId: link.toolId, cwd: entry.cwd, command: entry.command }],
           sessionsChanged: false,
           directory,
+          parentID: null,
         };
       }
       case "shell.deleted": {

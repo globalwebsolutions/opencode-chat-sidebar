@@ -65,6 +65,8 @@ export interface OpenCodeClient {
   accountStatus(directory: string): Promise<AccountStatus>;
   listSessions(directory: string, limit: number): Promise<SessionSummary[]>;
   getSession(id: string): Promise<SessionSummary>;
+  /** IDs of the sessions a session started as subagents (its direct children). */
+  listChildSessions(id: string): Promise<string[]>;
   createSession(input: { directory: string; agent?: string; model?: ModelRef }): Promise<SessionSummary>;
   listMessages(id: string, max: number): Promise<unknown[]>;
   prompt(
@@ -312,6 +314,12 @@ export class HttpOpenCodeClient implements OpenCodeClient {
   async getSession(id: string): Promise<SessionSummary> {
     const d = rec(await this.request("GET", `/api/session/${encodeURIComponent(id)}`));
     return toSessionSummary(d.data);
+  }
+
+  async listChildSessions(id: string): Promise<string[]> {
+    const d = rec(await this.request("GET", "/api/session", { query: { parentID: id, limit: "100" } }));
+    const list = Array.isArray(d.data) ? d.data : [];
+    return list.map((x) => str(rec(x).id)).filter((x): x is string => x !== null);
   }
 
   async createSession(input: {

@@ -177,9 +177,17 @@ export class Transcript {
               error: item.detail.error ?? (ev.outcome === "interrupted" ? "Interrupted" : null),
             };
             changed.push(this.upsert({ ...item, status, detail }));
-          } else if (item.kind === "permission" && (item.status === "pending" || item.status === "sending")) {
+          } else if (
+            item.kind === "permission" &&
+            (item.status === "pending" || item.status === "sending") &&
+            ownedBy(item.request.sessionID, ev.sessionID)
+          ) {
             changed.push(this.upsert({ ...item, status: "expired" }));
-          } else if (item.kind === "form" && (item.status === "pending" || item.status === "sending")) {
+          } else if (
+            item.kind === "form" &&
+            (item.status === "pending" || item.status === "sending") &&
+            ownedBy(item.form.sessionID, ev.sessionID)
+          ) {
             changed.push(this.upsert({ ...item, status: "expired" }));
           }
         }
@@ -247,6 +255,11 @@ export class Transcript {
         return [];
     }
   }
+}
+
+/** A request belongs to the idle session; without a session ID (replayed history) every request does. */
+function ownedBy(requestSession: string, idleSession: string | undefined): boolean {
+  return idleSession === undefined || requestSession === idleSession;
 }
 
 export function emptyDetail(): ToolDetail {
