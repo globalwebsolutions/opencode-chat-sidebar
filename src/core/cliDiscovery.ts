@@ -19,8 +19,13 @@ export function executableNames(platform: NodeJS.Platform): string[] {
   return platform === "win32" ? ["opencode.exe", "opencode.cmd", "opencode"] : ["opencode"];
 }
 
+/** Path rules of the platform being searched, so results do not depend on the host running the code. */
+function pathFor(platform: NodeJS.Platform): path.PlatformPath {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
 export function knownLocations(home: string, platform: NodeJS.Platform): string[] {
-  const p = platform === "win32" ? path.win32 : path.posix;
+  const p = pathFor(platform);
   const names = executableNames(platform);
   const dirs =
     platform === "win32"
@@ -40,19 +45,20 @@ export function knownLocations(home: string, platform: NodeJS.Platform): string[
   return dirs.flatMap((d) => names.map((n) => p.join(d, n)));
 }
 
-function expandHome(file: string, home: string): string {
+function expandHome(file: string, home: string, p: path.PlatformPath): string {
   if (file === "~") return home;
-  if (file.startsWith("~/") || file.startsWith("~\\")) return path.join(home, file.slice(2));
+  if (file.startsWith("~/") || file.startsWith("~\\")) return p.join(home, file.slice(2));
   return file;
 }
 
 export function discoverExecutable(env: DiscoveryEnv): DiscoveryResult {
+  const p = pathFor(env.platform);
   const searched: string[] = [];
   const configured = env.configuredPath.trim();
   if (configured) {
-    const candidate = expandHome(configured, env.home);
+    const candidate = expandHome(configured, env.home, p);
     searched.push(candidate);
-    if (path.isAbsolute(candidate) && env.isExecutable(candidate)) {
+    if (p.isAbsolute(candidate) && env.isExecutable(candidate)) {
       return { found: true, path: candidate, source: "setting" };
     }
     // An explicitly configured but invalid path is reported, not silently replaced.
@@ -62,9 +68,9 @@ export function discoverExecutable(env: DiscoveryEnv): DiscoveryResult {
   const sep = env.platform === "win32" ? ";" : ":";
   const names = executableNames(env.platform);
   for (const dir of env.pathEnv.split(sep).filter(Boolean)) {
-    if (!path.isAbsolute(dir)) continue; // never resolve relative PATH entries
+    if (!p.isAbsolute(dir)) continue; // never resolve relative PATH entries
     for (const name of names) {
-      const candidate = path.join(dir, name);
+      const candidate = p.join(dir, name);
       searched.push(candidate);
       if (env.isExecutable(candidate)) return { found: true, path: candidate, source: "PATH" };
     }

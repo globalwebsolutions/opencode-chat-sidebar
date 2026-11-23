@@ -12,10 +12,19 @@ import {
   type FsProbe,
 } from "../src/core/repository";
 
+/** Fixtures use POSIX-style paths; they are resolved for the host so the same tests run on Windows. */
 function fakeFs(entries: Record<string, string | "DIR">): FsProbe {
+  const map = new Map(Object.entries(entries).map(([k, v]) => [path.resolve(k), v]));
+  const at = (f: string) => map.get(path.resolve(f));
   return {
-    kind: (f) => (entries[f] === undefined ? undefined : entries[f] === "DIR" ? "dir" : "file"),
-    read: (f) => (entries[f] === undefined || entries[f] === "DIR" ? undefined : entries[f]),
+    kind: (f) => {
+      const v = at(f);
+      return v === undefined ? undefined : v === "DIR" ? "dir" : "file";
+    },
+    read: (f) => {
+      const v = at(f);
+      return v === undefined || v === "DIR" ? undefined : v;
+    },
   };
 }
 
@@ -50,7 +59,7 @@ describe("repository detection (synthetic)", () => {
 
   it("classifies a worktree .git file and derives the main working tree", () => {
     const r = classifyRepository("/wt", fakeFs({ "/wt/.git": "gitdir: /main/.git/worktrees/feature\n" }));
-    assert.deepEqual(r, { kind: "worktree", root: "/wt", mainWorktree: "/main" });
+    assert.deepEqual(r, { kind: "worktree", root: "/wt", mainWorktree: path.resolve("/main") });
   });
 
   it("treats a submodule .git file as local", () => {
@@ -67,7 +76,7 @@ describe("repository detection (synthetic)", () => {
 
   it("walks up to the repository root from a subfolder", () => {
     const r = detectRepository("/r/a/b", fakeFs({ "/r/.git": "DIR" }));
-    assert.equal(r.root, "/r");
+    assert.equal(r.root, path.resolve("/r"));
   });
 
   it("reports not-git when there is no repository", () => {

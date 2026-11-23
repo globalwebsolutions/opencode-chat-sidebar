@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { pathToFileURL } from "node:url";
 import { buildPrompt, chipFor, fenceFor, MAX_SELECTION_CHARS, validateSelection } from "../src/core/context";
 import type { ContextAttachment } from "../src/shared/model";
 import { splitUserText } from "../src/shared/userText";
+
+/** `/repo` as a file URI on the host (`file:///C:/repo` on Windows). */
+const REPO_URI = pathToFileURL("/repo").href;
 
 const file: ContextAttachment = {
   kind: "file",
@@ -25,7 +29,7 @@ describe("context attachments", () => {
   it("sends whole files as OpenCode file attachments, not inline text", () => {
     const p = buildPrompt("Explain", [file]);
     assert.equal(p.text, "Explain");
-    assert.deepEqual(p.files, [{ uri: "file:///repo/app/Checkout.php", name: "app/Checkout.php" }]);
+    assert.deepEqual(p.files, [{ uri: `${REPO_URI}/app/Checkout.php`, name: "app/Checkout.php" }]);
   });
 
   it("inlines only the selected lines with path and line range", () => {
@@ -50,7 +54,7 @@ describe("context attachments", () => {
 
   it("encodes special characters in file URIs", () => {
     const p = buildPrompt("x", [{ ...file, absPath: "/repo/my file#1.php" }]);
-    assert.equal(p.files[0].uri, "file:///repo/my%20file%231.php");
+    assert.equal(p.files[0].uri, `${REPO_URI}/my%20file%231.php`);
   });
 
   it("formats chips", () => {

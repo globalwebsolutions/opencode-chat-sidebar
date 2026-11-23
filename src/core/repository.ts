@@ -55,7 +55,8 @@ export function classifyRepository(root: string, fs: FsProbe): RepositoryDetecti
   if (wt) {
     const commonDir = wt[1];
     // The common dir is normally `<main>/.git`; a bare repository has no main working tree.
-    const main = path.basename(commonDir) === ".git" ? path.dirname(commonDir) : null;
+    // `commonDir` uses forward slashes (normalized above); restore the platform's separators.
+    const main = path.basename(commonDir) === ".git" ? path.normalize(path.dirname(commonDir)) : null;
     return { kind: "worktree", root, mainWorktree: main };
   }
   if (/\/modules\//.test(normalized)) return { kind: "local", root, mainWorktree: null };
