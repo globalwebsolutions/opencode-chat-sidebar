@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
+import { pathToFileURL } from "node:url";
 import { SessionController } from "../src/core/sessionController";
 import { OpenCodeHttpError } from "../src/opencode/client";
 import type { ContextAttachment, UiEvent } from "../src/shared/model";
@@ -119,7 +120,7 @@ describe("session controller: sessions and prompts", () => {
     const [sid, payload] = client.callsTo("prompt")[0].args as [string, { text: string; files: unknown[] }];
     assert.equal(sid, "ses_1");
     assert.match(payload.text, /^Explain\n\nSelected code from `a\.php` \(lines 2-3\)/);
-    assert.deepEqual(payload.files, [{ uri: `file://${DIR}/b.php`, name: "b.php" }]);
+    assert.deepEqual(payload.files, [{ uri: pathToFileURL(`${DIR}/b.php`).href, name: "b.php" }]);
     assert.equal(c.busy, true);
     // Continuing reuses the session.
     c.handleRawEvent(raw("session.execution.succeeded", { sessionID: "ses_1" }));

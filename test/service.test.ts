@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 import {
   basicAuth,
@@ -35,12 +36,13 @@ function deps(file: string | undefined, info: { status: number; body?: unknown }
 
 describe("server discovery", () => {
   it("resolves the service registration file like the official client", () => {
-    assert.equal(serviceFilePath({}, "/home/u"), "/home/u/.local/state/opencode/service.json");
-    assert.equal(serviceFilePath({ XDG_STATE_HOME: "/xdg" }, "/home/u"), "/xdg/opencode/service.json");
-    assert.equal(
-      serviceFilePath({ XDG_STATE_HOME: "relative" }, "/home/u"),
-      "/home/u/.local/state/opencode/service.json",
-    );
+    // Built with the host's path rules, as the extension does at runtime.
+    const home = path.resolve("/home/u");
+    const xdg = path.resolve("/xdg");
+    const fallback = path.join(home, ".local", "state", "opencode", "service.json");
+    assert.equal(serviceFilePath({}, home), fallback);
+    assert.equal(serviceFilePath({ XDG_STATE_HOME: xdg }, home), path.join(xdg, "opencode", "service.json"));
+    assert.equal(serviceFilePath({ XDG_STATE_HOME: "relative" }, home), fallback);
   });
 
   it("parses registrations defensively", () => {
