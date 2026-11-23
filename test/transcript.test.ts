@@ -113,6 +113,33 @@ describe("transcript reducer", () => {
     assert.ok(t.items.some((i) => i.kind === "notice" && i.text === "Stopped."));
   });
 
+  it("keeps a subagent's pending requests when only the parent session goes idle", () => {
+    const t = new Transcript();
+    const request = (id: string, sessionID: string) => ({
+      type: "permission.requested" as const,
+      request: {
+        id,
+        sessionID,
+        action: "bash",
+        resources: ["ls"],
+        canAlways: false,
+        message: null,
+        toolId: null,
+      },
+      sensitive: [],
+    });
+    t.apply(request("p_parent", "ses_parent"));
+    t.apply(request("p_sub", "ses_sub"));
+    t.apply({
+      type: "form.requested",
+      form: { id: "f_sub", sessionID: "ses_sub", title: "Q", fields: [], toolId: null },
+    });
+    t.apply({ type: "session.idle", outcome: "succeeded", sessionID: "ses_parent" });
+    assert.equal((t.get("perm:p_parent") as { status: string }).status, "expired");
+    assert.equal((t.get("perm:p_sub") as { status: string }).status, "pending");
+    assert.equal((t.get("form:f_sub") as { status: string }).status, "pending");
+  });
+
   it("does not reopen a resolved permission, but reopens one that failed to send", () => {
     const t = new Transcript();
     const request = {

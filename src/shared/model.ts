@@ -342,7 +342,15 @@ export type UiEvent =
   | { type: "permission.resolved"; requestId: string; decision: PermissionDecision | "expired" }
   | { type: "files.changed"; files: string[] }
   | { type: "session.busy" }
-  | { type: "session.idle"; outcome: "succeeded" | "failed" | "interrupted" }
+  | {
+      type: "session.idle";
+      outcome: "succeeded" | "failed" | "interrupted";
+      /**
+       * Session that went idle (live events). Only its own pending requests expire, so a
+       * subagent's request outlives the parent's turn. Absent for replayed history.
+       */
+      sessionID?: string;
+    }
   | { type: "session.error"; message: string; error: RawError | null; modelKey: string | null }
   | { type: "error"; id: string; title: string; detail: string; actions: ErrorAction[] }
   | {

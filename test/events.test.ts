@@ -179,7 +179,7 @@ describe("event normalization", () => {
     ]);
     assert.deepEqual(
       n.normalize(ev("session.execution.interrupted", { sessionID: S, reason: "user" }))?.events,
-      [{ type: "session.idle", outcome: "interrupted" }],
+      [{ type: "session.idle", outcome: "interrupted", sessionID: S }],
     );
     assert.deepEqual(
       n.normalize(
@@ -195,7 +195,7 @@ describe("event normalization", () => {
           error: { type: "provider.transport", message: "ConnectionRefused", status: null, body: null },
           modelKey: null,
         },
-        { type: "session.idle", outcome: "failed" },
+        { type: "session.idle", outcome: "failed", sessionID: S },
       ],
     );
     n.normalize(

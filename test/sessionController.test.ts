@@ -456,6 +456,15 @@ describe("session controller: subagent permissions and questions", () => {
     assert.ok(item?.kind === "form" && item.status === "pending");
   });
 
+  it("keeps a subagent's request answerable after the parent's turn ends", async () => {
+    const { c, client } = await withSubagent();
+    c.handleRawEvent(subPermission("per_sub", "ses_sub"));
+    c.handleRawEvent(raw("session.execution.succeeded", { sessionID: "ses_1" }));
+    assert.equal((c.transcript.get("perm:per_sub") as { status: string }).status, "pending");
+    await c.respondPermission("per_sub", "once");
+    assert.deepEqual(client.callsTo("replyPermission")[0].args, ["ses_sub", "per_sub", "once"]);
+  });
+
   it("ignores requests from sessions that are not part of the open session", async () => {
     const { c } = await withSubagent();
     c.handleRawEvent(raw("session.created", { sessionID: "ses_other_child", parentID: "ses_other" }));
